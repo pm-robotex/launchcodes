@@ -11,9 +11,9 @@ Then it waits for your host's production build and, if you tell it your domain, 
 
 Distilled from the release process behind 23+ real production releases of a React + Supabase ERP.
 
-> **v0.1.0, new.** The self-test passes on Windows, macOS and Linux (see the badge). The live check has so far
-> been tested only against a stand-in for GitHub: if you use it with a real host, please tell us how it went. Read
-> the scripts before you trust them with production: they're short, and each one says what it does at the top.
+> **v0.1.0, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put real
+> releases live on a Vercel site. Other hosts are untested: if you use one, please tell us how it went. Read the
+> scripts before you trust them with production: they're short, and each one says what it does at the top.
 
 ## A release, start to finish
 
@@ -67,7 +67,7 @@ Try it first with **`/launchcodes dry-run`**: every check and the plan, and noth
 
 | | Tested | Should work | Not covered |
 |---|---|---|---|
-| **Host** | not yet against a real host (the live check is tested against a stand-in for GitHub) | Vercel, and any host that deploys when a GitHub branch changes (Netlify, Cloudflare Pages, Render, ...). The live check needs the host to report deployments to GitHub; if it doesn't, launchcodes says so and you look at your host's dashboard. | Hosts you deploy to by hand |
+| **Host** | Vercel (a Vite app on its default settings: the live check confirmed "Live") | Any host that deploys when a GitHub branch changes (Netlify, Cloudflare Pages, Render, ...). The live check needs the host to report deployments to GitHub; if it doesn't, launchcodes says so and you look at your host's dashboard. | Hosts you deploy to by hand |
 | **App** | JavaScript / TypeScript web apps built with npm | pnpm, yarn and bun; other stacks with `buildCommand` set (the code check is JS-only, and Node is still needed) | |
 | **Database** | Supabase (production checked) | Any database: launchcodes never touches it, but only Supabase is checked | |
 | **Git** | GitHub | Other git servers: the push works, but the live check needs GitHub | |
