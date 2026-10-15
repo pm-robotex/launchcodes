@@ -1,0 +1,2 @@
+# Keep every file LF on every OS: a Windows checkout with CRLF breaks bash ($'\r': command not found).
+* text=auto eol=lf

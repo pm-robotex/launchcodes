@@ -1,0 +1,6 @@
+{
+  "prodBranch": "main",
+  "domain": "www.example.com",
+  "supabaseProjectRef": "your-production-project-ref",
+  "neverShip": ["^private/"]
+}

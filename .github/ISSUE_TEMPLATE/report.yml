@@ -1,0 +1,24 @@
+name: Report a problem or a self-test result
+description: Something didn't work, or you ran tests/selftest.sh on your machine
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you saw instead. Leave out keys, passwords and private paths.
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: "Your OS, plus the output of: git --version, node --version, bash --version (first line), and Claude Code's version"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The script's output, or the full output of tests/selftest.sh. It can contain your user name inside folder paths (C:/Users/<name>/...); replace it before posting.
+      render: text
