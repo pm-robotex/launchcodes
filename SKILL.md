@@ -91,7 +91,8 @@ bash "${CLAUDE_SKILL_DIR}/scripts/plan.sh" "<WT>" --name '<name>' [--db checked|
 ```
 `BAD NAME` or `NO NAME`: choose another name, run it again. `DATABASE QUERY NOT RUN YET`: back to step 3.
 `READY_TO_ASK`: post the plan as its own message, with nothing after it: plain words, at most 15 lines, no ids or
-paths in the body.
+paths in the body. The plan facts list each commit's files, which is usually enough to say what it does. To see
+more, `git show --stat <id>` or `git show <id> -- <file>` is fine: plain read-only git, never `git -C`.
 
 > **Ship <code> · <name>: ready to put N commit(s) live on <domain or branch>. Nothing has gone live yet.**
 > - <each commit: its own subject, and what it does in plain words> (group them only beyond about 10)
@@ -121,11 +122,12 @@ bash "${CLAUDE_SKILL_DIR}/scripts/push.sh" "<WT>" --owner-said-yes=<code>
 <what it printed>. Check your host's dashboard.** The permission prompt was refused: nothing was pushed; ask once,
 *Launch now* or *Stop*. Never retry silently.
 
-## 6 · Live check: run it in the background, never poll its output
+## 6 · Live check (`timeout: 600000`): in the foreground, never in the background
 ```
 bash "${CLAUDE_SKILL_DIR}/scripts/wait_live.sh" "<WT>"
 ```
-The moment it returns, post one line:
+It can take up to 9 minutes. Don't run it in the background: its result would arrive in a new turn, where the
+cleanup is no longer pre-approved. When it returns, post one line:
 - `LIVE`: **Ship <code> · <name>: Live ✅ <domain> serves it (<time>).**
 - `DEPLOYED`: **Ship <code> · <name>: Published ✅ <host> finished building it (<time>); <the reason it gives why the domain wasn't confirmed>.**
 - anything else: **Ship <code> · <name>: pushed, not confirmed live: <reason in plain words>.** <branch> now has

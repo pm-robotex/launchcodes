@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# etag.sh <url>
-# Prints "<http status> <etag>" for the home page of <url>, following redirects (the last response counts).
-# The ETag is a fingerprint of the page your host serves: two deployments with the same home page share it.
+# etag.sh <url> [body-file]
+# Prints "<http status> <etag>" for the home page of <url>, following redirects (the last response counts), and saves
+# the page itself to <body-file> if one is given. The ETag is a fingerprint of the page your host serves.
 set -u
 U="${1%/}"; case "$U" in http*) ;; *) U="https://$U" ;; esac
-CURL=(curl -sL -o /dev/null -D - --max-time 20)
+CURL=(curl -sL -o "${2:-/dev/null}" -D - --max-time 20)
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) curl --help all 2>/dev/null | grep -q -- '--ssl-revoke-best-effort' && CURL+=(--ssl-revoke-best-effort) ;;
 esac

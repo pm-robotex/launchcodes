@@ -57,8 +57,10 @@ Try it first with **`/launchcodes dry-run`**: every check and the plan, and noth
   on production. launchcodes writes one read-only query that checks production has every table, column, function
   and storage bucket the new code uses, and Claude runs it, or you paste it into the SQL editor.
 - **"It returned 200, so it's live."** Single-page apps answer 200 for every address. launchcodes waits for your
-  host's production deployment of that exact commit and, if you set your domain, compares what the domain serves.
-  When it can't be sure, it says so instead of saying "live".
+  host's production deployment of that exact commit and, if you set your domain, checks what the domain serves:
+  its home page must now load a file only this build made (bundlers put a content hash in file names, like
+  `index-DZhMrgGv.js`), or match the new deployment's fingerprint. When it can't be sure, it says "Published", with
+  the reason, instead of "Live".
 - **Someone else pushed in the meantime.** The push refuses, and nothing is overwritten. It never uses `--force`.
 
 ## Works with
@@ -165,7 +167,8 @@ branch runs it.
 - TypeScript files (`.ts`, `.tsx`) aren't code-checked; they're covered only if your build runs the TypeScript
   checker (Next.js does; a plain `vite build` doesn't). Runtime and logic bugs aren't caught either: launchcodes is
   not a test suite or CI.
-- Differences between the clean copy's build and your host's build settings, such as environment variables.
+- Differences between the clean copy's build and your host's build settings, such as environment variables. (The
+  live check then can't match this build's files on your domain, and says "Published" rather than "Live".)
 - Supabase: row-level security policies (the per-row access rules; only table and function permissions are
   checked), table names built at runtime (listed for you to read), schemas other than `public`, and edge functions
   (listed, not checked). Other databases aren't checked at all.
@@ -185,7 +188,7 @@ branch runs it.
 
 ## Where the clean copy goes
 
-- Windows: the top of your drive, like `C:\launch-myapp-1a2b3c-14Oct-2`, because long paths break Windows
+- Windows: the top of your drive, like `C:\launch-myapp-1a2b3c-14Oct-2-7f3e`, because long paths break Windows
   checkouts. If that isn't allowed, `%LOCALAPPDATA%\launchcodes`. macOS: `$TMPDIR`. Linux: `~/.cache/launchcodes`.
   Set `workDir` to choose.
 - It holds a full install, so it can take hundreds of MB. Cleanup removes it at the end of every release. A copy left
@@ -206,7 +209,7 @@ and why.
 | `check.sh` | runs `never_ships.mjs`, `secret_scan.mjs`, `scope_lint.mjs` and, for Supabase, `db_refs.mjs` + `refcheck_sql.mjs` |
 | `plan.sh` | records the release's name and the exact file list you are approving |
 | `push.sh` | pushes only if: the code matches, it's built, checked and planned, the files match your approval, the secret checks still pass, and nobody pushed or rolled back meanwhile |
-| `wait_live.sh` | waits for your host's production deployment and compares it with your domain (`etag.sh`) |
+| `wait_live.sh` | waits for your host's production deployment, then checks your domain serves it: a file only this build made, or the same fingerprint (`etag.sh`) |
 | `cleanup.sh` | removes the clean copy |
 
 ## Contributing

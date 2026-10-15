@@ -47,15 +47,18 @@ case "$2" in
   */statuses) echo 0 ;;
 esac
 EOF
-# Stand-in for curl, as etag.sh calls it: the home page of the domain or of a deployment, with a canned status and ETag.
+# Stand-in for curl, as etag.sh calls it: the home page of the domain or of a deployment, with a canned status, ETag
+# and page (written to the -o file).
 cat > "$ROOT/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-for a in "$@"; do url="$a"; done
+out=/dev/null; prev=""
+for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; url="$a"; done
 case " $* " in *" --help "*) exit 0 ;; esac
 case "$url" in
-  *deploy-*) st="${STUB_DEPLOY_STATUS:-200}"; tag="${STUB_DEPLOY_ETAG:-}" ;;
-  *)         st="${STUB_DOMAIN_STATUS:-200}"; tag="${STUB_DOMAIN_ETAG:-}" ;;
+  *deploy-*) st="${STUB_DEPLOY_STATUS:-200}"; tag="${STUB_DEPLOY_ETAG:-}"; body="" ;;
+  *)         st="${STUB_DOMAIN_STATUS:-200}"; tag="${STUB_DOMAIN_ETAG:-}"; body="${STUB_DOMAIN_BODY:-}" ;;
 esac
+printf '%s' "$body" > "$out"
 printf 'HTTP/1.1 %s X\r\n' "$st"; [ -n "$tag" ] && printf 'ETag: "%s"\r\n' "$tag"; printf '\r\n'
 EOF
 chmod +x "$ROOT/bin/gh" "$ROOT/bin/curl"; export PATH="$ROOT/bin:$PATH"; export GH_STUB=off
@@ -69,7 +72,12 @@ new_app() {   # new_app <name>: a bare origin <name>.git and a clone <name> with
 const fs = require('fs');
 if (fs.existsSync('BREAK')) { console.error('intentional build error'); process.exit(1); }
 if (fs.existsSync('NEEDS_ENV') && !fs.existsSync('.env.local')) { console.error('Error: supabaseUrl is required.'); process.exit(1); }
-fs.mkdirSync('dist', { recursive: true }); fs.writeFileSync('dist/out.txt', 'built');
+// Like a bundler: a file named after a hash of what was built, loaded by index.html.
+const src = fs.readdirSync('.').filter((f) => !f.startsWith('.launch') && fs.statSync(f).isFile()).sort();
+const hash = require('crypto').createHash('sha1').update(src.map((f) => f + fs.readFileSync(f)).join('')).digest('hex').slice(0, 8);
+fs.mkdirSync('dist/assets', { recursive: true }); fs.writeFileSync('dist/out.txt', 'built');
+fs.writeFileSync(`dist/assets/app-${hash}.js`, 'console.log(1)');
+fs.writeFileSync('dist/index.html', `<script type="module" src="/assets/app-${hash}.js"></script>`);
 EOF
   printf 'dist/\nnode_modules/\n.env*\n!.env.example\n' > "$d/.gitignore"
   mkdir -p "$d/.claude"; cfgset "$d" ''
@@ -104,7 +112,7 @@ prep "$A"
 [ "$RC" -eq 0 ] && [ -n "$WT" ] && [ -d "$WT" ] && ok "prepare makes a clean copy" || bad "prepare makes a clean copy" "$OUT"
 grep -q "NOT part of this release" <<<"$OUT" && ok "prepare warns about uncommitted files" || bad "prepare warns about uncommitted files" "$OUT"
 [ ! -e "$WT/notes.txt" ] && ok "the clean copy holds only committed files" || bad "the clean copy holds only committed files" "$(ls -a "$WT")"
-[[ "$CODE" =~ ^[0-9]{2}[A-Z][a-z]{2}-1$ ]] && [[ "$WT" == *"-$CODE" ]] && ok "the release gets a launch code like 14Oct-1, also in its folder name" || bad "the release gets a launch code" "code=$CODE wt=$WT"
+[[ "$CODE" =~ ^[0-9]{2}[A-Z][a-z]{2}-1$ ]] && [[ "$WT" =~ -$CODE-[0-9a-f]{4}$ ]] && ok "the release gets a launch code like 14Oct-1, also in its folder name (with 4 random characters)" || bad "the release gets a launch code" "code=$CODE wt=$WT"
 WT1="$WT"; CODE1="$CODE"
 prep "$A"; [[ "$CODE" == *-2 ]] && ok "a second release the same day gets -2" || bad "a second release the same day gets -2" "$CODE"
 grep -q "Not cleaned up yet" <<<"$OUT" && grep -q "$CODE1" <<<"$OUT" && ok "prepare shows a release that is still open" || bad "prepare shows a release that is still open" "$OUT"
@@ -319,15 +327,23 @@ git -C "$V" config remote.origin.url https://github.com/test/live.git
 git -C "$V" config "url.$(winpath "$V.git").insteadOf" https://github.com/test/live.git
 commit "$V" v.txt v "a change to watch go live"
 full "$V"; [ "$FULL_RC" = 0 ] || bad "live setup" "step $FULL_RC: $OUT $CHECK_OUT"
-export STUB_DOMAIN_ETAG=v1
+expect "the plan lists each commit's files" 0 'v\.txt' bash "$S/plan.sh" "$WT" --name 'Test release'
+asset="$(head -1 "$WT/.launch-assets" 2>/dev/null)"
+grep -qE '^app-[0-9a-f]{8}\.js$' <<<"$asset" && ok "the build notes the content-hashed files it made" || bad "the build notes the content-hashed files it made" "$(cat "$WT/.launch-assets" 2>&1)"
+export STUB_DOMAIN_ETAG=v1 STUB_DOMAIN_BODY='<script type="module" src="/assets/app-0ld0ld00.js"></script>'
 expect "with a domain set, the push goes through" 0 PUSHED_OK bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
-grep -q '^ETAG_BEFORE=' "$WT/.launch-state" && ok "and it notes the domain's fingerprint before pushing" || bad "and it notes the domain's fingerprint before pushing" "$(cat "$WT/.launch-state")"
+grep -q '^ETAG_BEFORE=' "$WT/.launch-state" && grep -q 'app-0ld0ld00' "$WT/.launch-before.html" && ok "and it notes the domain's fingerprint and page before pushing" || bad "and it notes the domain's fingerprint and page before pushing" "$(cat "$WT/.launch-state")"
 export GH_STUB=success RETRY_SLEEP=0
 export STUB_DOMAIN_ETAG=v2 STUB_DEPLOY_ETAG=v2; expect "LIVE when the domain serves the new deployment" 0 "LIVE:" bash "$S/wait_live.sh" "$WT" 30
 export STUB_DOMAIN_ETAG=v1 STUB_DEPLOY_ETAG=v1; expect "an unchanged home page gives DEPLOYED, never LIVE" 0 "same before and after" bash "$S/wait_live.sh" "$WT" 30
 export STUB_DOMAIN_ETAG=v1 STUB_DEPLOY_ETAG=v2; expect "a domain serving another build is NOT_CONFIRMED" 5 NOT_CONFIRMED bash "$S/wait_live.sh" "$WT" 30
-export STUB_DOMAIN_ETAG=v2 STUB_DEPLOY_ETAG=x STUB_DEPLOY_STATUS=401; expect "a protected deployment address gives DEPLOYED, with the reason" 0 "couldn't be compared" bash "$S/wait_live.sh" "$WT" 30
-unset STUB_DEPLOY_STATUS
+export STUB_DOMAIN_ETAG=v2 STUB_DEPLOY_ETAG=x STUB_DEPLOY_STATUS=401; expect "a protected deployment address, and the old files still served, give DEPLOYED with the reason" 0 "load a file from this build" bash "$S/wait_live.sh" "$WT" 30
+export STUB_DOMAIN_BODY="<script type=\"module\" src=\"/assets/$asset\"></script>"
+expect "LIVE when the home page loads a file only this build made, even behind a protected deployment address" 0 "only this build has" bash "$S/wait_live.sh" "$WT" 30
+mv "$WT/.launch-before.html" "$WT/.launch-before.bak"
+expect "without the page from before the push, that file is not proof" 0 "DEPLOYED" bash "$S/wait_live.sh" "$WT" 30
+mv "$WT/.launch-before.bak" "$WT/.launch-before.html"
+unset STUB_DEPLOY_STATUS STUB_DOMAIN_BODY
 export GH_STUB=inactive; expect "a deployment replaced by a newer one is NOT_CONFIRMED" 5 "replaced" bash "$S/wait_live.sh" "$WT" 30
 export GH_STUB=pending; expect "a build that never finishes times out" 2 TIMEOUT env POLL=1 bash "$S/wait_live.sh" "$WT" 2
 export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP

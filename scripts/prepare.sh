@@ -108,7 +108,7 @@ day="$(date +%Y-%m-%d)"; dd="$(LC_ALL=C date +%d%b)"; CODE=""
 for i in $(seq 1 99); do mkdir "$L/codes/$day-$i" 2>/dev/null && { CODE="$dd-$i"; break; }; done
 [ -n "$CODE" ] || die "SETUP: no free launch code left for today in $L/codes"
 
-# 5 · the clean copy: launch-<repo>-<6 characters unique to this repo>-<code>
+# 5 · the clean copy: launch-<repo>-<6 characters unique to this repo>-<code>-<4 random characters>
 name="$(basename "$R" | tr -c 'A-Za-z0-9\n' '-' | cut -c1-24)"
 rid="$(printf '%s' "$CD" | git hash-object --stdin | cut -c1-6)"
 wd="$(node "$S/cfg.mjs" "$R" workDir "")" || die "$wd"
@@ -125,7 +125,10 @@ else
     *) place="${XDG_CACHE_HOME:-$HOME/.cache}/launchcodes"; mkdir -p "$place" ;;
   esac
 fi
-WT="$place/launch-$name-$rid-$CODE"
+# 4 random characters at the end: launch codes start again every day, and the push command names this folder, so a
+# "don't ask again" saved for one launch can never approve another one.
+nonce="$(od -An -N2 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"; [ -n "$nonce" ] || nonce="$(printf '%04x' "$RANDOM")"
+WT="$place/launch-$name-$rid-$CODE-$nonce"
 [ -e "$WT" ] && die "EXISTS: $WT is already there. If another chat is using it, wait for that release to finish; if not, remove it with cleanup.sh and run /launchcodes again."
 if ! out="$(g -c core.longpaths=true worktree add --detach "$WT" "$T" 2>&1)"; then
   [ -e "$WT" ] && g -c core.longpaths=true worktree remove --force "$WT" >/dev/null 2>&1

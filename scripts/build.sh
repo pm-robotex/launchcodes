@@ -86,6 +86,13 @@ if [ -n "$BUILD" ]; then
 else
   STATUS=skipped; echo "No build step (no build script and no buildCommand): nothing to compile."
 fi
+# File names with a content hash (index-DZhMrgGv.js, main.3f2a1b4c.css) let the live check spot this exact build on
+# your domain, even when your host hides each deployment's own address behind a login.
+: > "$WT/.launch-assets"
+if [ "$STATUS" = passed ]; then
+  for o in dist build out .next/static; do [ -d "$D/$o" ] && find "$D/$o" -type f \( -name '*.js' -o -name '*.css' \) 2>/dev/null; done \
+    | sed 's#.*/##' | grep -E '[-.][A-Za-z0-9_-]{8,}\.(js|css)$' | sort -u | head -200 > "$WT/.launch-assets"
+fi
 cmds="${INSTALL:-no install}; ${BUILD:-no build}"
 { printf 'BUILT_TREE=%q\n' "$TREE"; printf 'BUILD_STATUS=%q\n' "$STATUS"; printf 'BUILD_ENV=%q\n' "$nenv"; printf 'BUILD_CMDS=%q\n' "$cmds"; } >> "$WT/.launch-state"
 if [ "$STATUS" = passed ]; then echo "BUILD_PASSED"; else echo "BUILD_SKIPPED"; fi

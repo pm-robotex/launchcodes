@@ -55,14 +55,23 @@ printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" PLANNED "$NAME"
 
 echo "PLAN FACTS: Ship $CODE · $NAME"
 echo "  release: $(git -C "$R" rev-list --count "$BASE..$T") commit(s) to $PROD on origin, ${BASE:0:7} -> ${T:0:7}$dry"
-echo "  commits (oldest first):"
-git -C "$R" log --reverse --format='%h%x09%s' "$BASE..$T" | while IFS=$'\t' read -r h s; do
+echo "  commits (oldest first), each with the files it changes (A added, M changed, D deleted):"
+git -C "$R" log --reverse --format='%h%x09%p%x09%s' "$BASE..$T" | while IFS=$'\t' read -r h p s; do
   flag=""
   if printf '%s' "$s" | grep -qiE '(^|[^a-z])(wip|tmp|temp|debug|hack|fixme|xxx|do not (ship|merge|push|deploy)|don.?t (ship|merge|push|deploy)|local only|test only)([^a-z]|$)|^(fixup|squash)!'; then
     flag="   <- SUSPECT: looks like unfinished or local-only work"
   fi
   echo "    $h  $s$flag"
+  # A merge is listed against its first parent: what it brings into the branch.
+  case "$p" in
+    *" "*) git -c core.quotePath=false -C "$R" diff --name-status --no-renames "$h^1" "$h" ;;
+    *) git -c core.quotePath=false -C "$R" diff-tree -r --root --no-commit-id --name-status --no-renames "$h" ;;
+  esac > "$WT/.launch-files-tmp" 2>/dev/null
+  n=$(grep -c . "$WT/.launch-files-tmp")
+  head -8 "$WT/.launch-files-tmp" | sed 's/^/        /'
+  [ "$n" -gt 8 ] && echo "        (+$((n - 8)) more)"
 done
+rm -f "$WT/.launch-files-tmp"
 echo "  files: $(git -C "$R" diff --shortstat --no-renames "$BASE" "$T" | sed 's/^ *//')"
 added="$(git -c core.quotePath=false -C "$R" diff --name-only --diff-filter=A --no-renames "$BASE" "$T" | grep -iE '(^|/)(seeds?|fixtures?|mocks?)(/|\.)' | head -5)"
 [ -n "$added" ] && { echo "  SUSPECT files (test data going live?):"; echo "$added" | sed 's/^/    /'; }

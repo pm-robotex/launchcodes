@@ -33,7 +33,7 @@ pushed() {
 # The domain's fingerprint BEFORE the push lets the live check tell whether the site changed afterwards. Taken first,
 # so the last checks below run right before the push.
 DOMAIN="$(node "$S/cfg.mjs" "$R" domain "" 2>/dev/null)"
-[ -n "$DOMAIN" ] && printf 'ETAG_BEFORE=%q\n' "$(bash "$S/etag.sh" "$DOMAIN")" >> "$WT/.launch-state"
+[ -n "$DOMAIN" ] && printf 'ETAG_BEFORE=%q\n' "$(bash "$S/etag.sh" "$DOMAIN" "$WT/.launch-before.html")" >> "$WT/.launch-state"
 
 git -C "$R" fetch origin -q || { echo "NOT PUSHED: fetch failed (network?). Nothing changed."; exit 1; }
 cur="$(git -C "$R" rev-parse --verify -q "refs/remotes/origin/$PROD")"
