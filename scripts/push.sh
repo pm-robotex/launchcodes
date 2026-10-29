@@ -10,7 +10,8 @@
 #   3. production on origin is still exactly where it was when this started (nobody pushed or rolled it back)
 #   4. the files changing are exactly the list you approved
 #   5. both secret checks still pass (run again here, the last moment before the push)
-# Then it pushes that exact commit by its id (never a branch name, never --force) and checks GitHub has it.
+# Then it pushes that exact commit by its id (never a branch name, never --force) and checks GitHub has it. With
+# "releaseCommit" it pushes a merge commit named "Ship <code> · <name>" on top instead, holding the same files.
 set -u
 WT="${1:?usage: push.sh <WT> --owner-said-yes=<launch code>}"
 [ -f "$WT/.launch-state" ] || { echo "NOT PUSHED: no state in $WT"; exit 1; }
@@ -26,9 +27,10 @@ LINT_V="${LINT:-}"
 [ "${PLANNED:-}" = "$TREE" ] && [ -f "$WT/.launch-approved-files" ] || { echo "NOT PUSHED: no plan recorded (run plan.sh and show the plan first)"; exit 1; }
 
 led() { printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" "$1" "$2" >> "$LOG" 2>/dev/null; }
+TIP="$T"    # what lands on top of $PROD: the release's commit, or (with "releaseCommit") a merge commit named after it
 pushed() {
   stamp="$(date '+%Y-%m-%d %H:%M %Z')"
-  printf 'PUSHED=%q\n' "$T at $stamp" >> "$WT/.launch-state"; led PUSHED "$PROD ${BASE:0:7} -> ${T:0:7}"
+  printf 'PUSHED=%q\n' "$TIP at $stamp" >> "$WT/.launch-state"; led PUSHED "$PROD ${BASE:0:7} -> ${TIP:0:7}"
 }
 # The domain's fingerprint BEFORE the push lets the live check tell whether the site changed afterwards. Taken first,
 # so the last checks below run right before the push.
@@ -47,21 +49,33 @@ git -c core.quotePath=false -C "$R" diff --name-only --no-renames "$BASE" "$T" |
 node "$S/never_ships.mjs" "$R" "$BASE" "$T" "$PROD" >/dev/null 2>&1 || { echo "NOT PUSHED: the secret-file check no longer passes (run check.sh)"; exit 1; }
 node "$S/secret_scan.mjs" "$R" "$BASE" "$T" "$PROD" >/dev/null 2>&1 || { echo "NOT PUSHED: the keys-in-code check no longer passes (run check.sh)"; exit 1; }
 
-git -C "$R" push --no-follow-tags --recurse-submodules=no origin "$T:refs/heads/$PROD" > "$WT/.launch-push.log" 2>&1; rc=$?
+# The release commit: a merge commit whose first parent is what's live and whose second is the release, holding
+# exactly the files that were built and checked. Your host builds it and shows its subject, the release's name.
+if [ "${RELEASE_COMMIT:-}" = true ]; then
+  { printf 'Ship %s · %s\n\n' "$CODE" "${SHIP_NAME:-release}"
+    echo "Released with /launchcodes after the owner's yes to the plan."
+    echo; echo "Commits in this release:"
+    git -C "$R" log --reverse --no-merges --format='  %h %s' "$BASE..$T" | head -40; } > "$WT/.launch-release-msg"
+  TIP="$(git -C "$R" commit-tree "$T^{tree}" -p "$BASE" -p "$T" -F "$WT/.launch-release-msg" 2> "$WT/.launch-release-err")" \
+    && [ "$(git -C "$R" rev-parse "$TIP^{tree}" 2>/dev/null)" = "$TREE" ] \
+    || { echo "NOT PUSHED: couldn't make the release commit: $(head -3 "$WT/.launch-release-err" 2>/dev/null)"; exit 1; }
+fi
+
+git -C "$R" push --no-follow-tags --recurse-submodules=no origin "$TIP:refs/heads/$PROD" > "$WT/.launch-push.log" 2>&1; rc=$?
 cat "$WT/.launch-push.log"
 git -C "$R" fetch origin -q
 now="$(git -C "$R" rev-parse --verify -q "refs/remotes/origin/$PROD")"
-if [ "$now" = "$T" ]; then
+if [ "$now" = "$TIP" ]; then
   pushed
   [ $rc -ne 0 ] && echo "(git reported exit $rc, but GitHub has the commit)"
-  echo "PUSHED_OK  Ship $CODE · $PROD is now ${T:0:7}"
+  echo "PUSHED_OK  Ship $CODE · ${SHIP_NAME:-} · $PROD is now ${TIP:0:7}"
   echo "NEXT: live check"; exit 0
 fi
-if [ -n "$now" ] && [ "$now" != "$BASE" ] && git -C "$R" merge-base --is-ancestor "$T" "$now" 2>/dev/null; then
+if [ -n "$now" ] && [ "$now" != "$BASE" ] && git -C "$R" merge-base --is-ancestor "$TIP" "$now" 2>/dev/null; then
   pushed
-  echo "PUSHED_OK  Ship $CODE · ${T:0:7} is on $PROD, and someone pushed on top of it right after (now ${now:0:7})."
+  echo "PUSHED_OK  Ship $CODE · ${TIP:0:7} is on $PROD, and someone pushed on top of it right after (now ${now:0:7})."
   echo "NEXT: live check (your host may build only the newer commit)"; exit 0
 fi
 if [ $rc -ne 0 ]; then echo "NOT PUSHED: git push failed (exit $rc). Nothing changed. Never retry with --force."; exit 1; fi
-echo "PUSH UNCLEAR: $PROD on origin is ${now:0:7}, expected ${T:0:7}. Look before doing anything else."
+echo "PUSH UNCLEAR: $PROD on origin is ${now:0:7}, expected ${TIP:0:7}. Look before doing anything else."
 exit 1

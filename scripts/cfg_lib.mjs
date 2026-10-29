@@ -11,6 +11,7 @@ const KEYS = {
   prodBranch: 'string', domain: 'string', supabaseProjectRef: 'string', appDir: 'dir',
   buildCommand: 'string', installCommand: 'string', workDir: 'abs',
   buildEnvFiles: 'paths', neverShip: 'regexes', allowPaths: 'regexes', lintGlobals: 'names', codeCheck: 'boolean',
+  releaseCommit: 'boolean',
 };
 const EXAMPLE = { domain: /^(https?:\/\/)?(www\.)?example\.(com|org)\/?$/i, supabaseProjectRef: /^your-/i };
 const inside = (p) => !(p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:/.test(p) || p.split(/[\\/]/).includes('..'));

@@ -55,6 +55,13 @@ printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" PLANNED "$NAME"
 
 echo "PLAN FACTS: Ship $CODE · $NAME"
 echo "  release: $(git -C "$R" rev-list --count "$BASE..$T") commit(s) to $PROD on origin, ${BASE:0:7} -> ${T:0:7}$dry"
+[ "${RELEASE_COMMIT:-}" = true ] && echo "  release commit: they land under one merge commit named \"Ship $CODE · $NAME\", the name your host's deployment list shows"
+und="${UNDEPLOYED:-0}"; und_n="${und%% *}"; und_sha="${und#* }"
+if [ "${und_n:-0}" -gt 0 ] 2>/dev/null; then
+  echo "  ALSO GOING LIVE: $und_n commit(s) already on $PROD that your host never put live (its last production build is ${und_sha:0:7}):"
+  git -C "$R" log --no-merges --format='      %h  %s' "$und_sha..$BASE" | head -10
+fi
+[ -n "${EDGE_FNS:-}" ] && echo "  EDGE FUNCTIONS changed, which pushing does NOT deploy: ${EDGE_FNS}"
 echo "  commits (oldest first), each with the files it changes (A added, M changed, D deleted):"
 git -C "$R" log --reverse --format='%h%x09%p%x09%s' "$BASE..$T" | while IFS=$'\t' read -r h p s; do
   flag=""

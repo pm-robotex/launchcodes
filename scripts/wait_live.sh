@@ -4,9 +4,10 @@
 # Step 6. Waits for your host's PRODUCTION deployment of the pushed commit and, if "domain" is set, checks that
 # your domain now serves it. Needs the GitHub CLI (gh), logged in, and a host that reports deployments to GitHub
 # (Vercel does). Why not "the URL returns 200"? Single-page apps answer 200 for every path, so that proves nothing.
-# It says LIVE only on real evidence, new since the push: your home page loads a file only this build has (a
-# content-hashed name like index-DZhMrgGv.js), or it has the same fingerprint (ETag) as the deployment's own
-# address. Anything weaker is DEPLOYED, with the reason.
+# It says LIVE only on real evidence, new since the push: your home page, or a script it loads, carries this
+# release's commit id (many builds stamp it); or it loads a file only this build has (a content-hashed name like
+# index-DZhMrgGv.js); or it has the same fingerprint (ETag) as the deployment's own address. Anything weaker is
+# DEPLOYED, with the reason. A failed deployment is reported with your host's own reason and link.
 # One verdict, then exit:
 #   0 LIVE          your domain serves the new deployment
 #   0 DEPLOYED      your host finished the production build; your domain wasn't confirmed (the line says why)
@@ -45,6 +46,27 @@ new_asset() {
   done < "$WT/.launch-assets"
   return 1
 }
+# This release's commit id, written into the page or into a script it loads (many builds stamp it, from
+# `git rev-parse HEAD` or the host's commit variable). Matched only as a whole quoted string, so a chance match
+# in minified code is all but impossible. Prints the id it found.
+has_id() {
+  local c
+  for c in $IDS; do grep -qE "[\"'\`]$c[0-9a-f]{0,33}[\"'\`]" "$1" 2>/dev/null && { echo "$c"; return 0; }; done
+  grep -qF "$SHA" "$1" 2>/dev/null && { echo "${SHA:0:7}"; return 0; }
+  return 1
+}
+stamp_hit() {
+  local src u h n=0
+  has_id "$1" && return 0
+  h="${DOMAIN#*://}"; h="${h%%/*}"
+  for src in $(grep -oE '<script[^>]+src="[^"]+"' "$1" 2>/dev/null | sed -E 's/.*src="([^"]+)".*/\1/' | head -3); do
+    case "$src" in http*) u="$src" ;; //*) u="https:$src" ;; /*) u="https://$h$src" ;; *) u="https://$h/$src" ;; esac
+    n=$((n + 1)); bash "$S/etag.sh" "$u" "$WT/.launch-script-$n.js" >/dev/null
+    has_id "$WT/.launch-script-$n.js" && return 0
+  done
+  return 1
+}
+IDS="${SHA:0:7}"; [ "${T:0:7}" != "${SHA:0:7}" ] && IDS="$IDS ${T:0:7}"
 
 start=$(date +%s); seen=0
 while :; do
@@ -68,6 +90,9 @@ while :; do
         before="${ETAG_BEFORE:-000 }"; before_tag="${before#* }"; note=""; other=0; body="$WT/.launch-now.html"
         for i in 1 2 3 4 5 6; do
           read -r dst dtag <<<"$(bash "$S/etag.sh" "$DOMAIN" "$body")"; ust="000"; utag=""
+          if id="$(stamp_hit "$body")"; then
+            echo "LIVE: $DOMAIN serves ${SHA:0:7}: it carries this release's commit id, $id ($(now))"; led LIVE "$(now)"; exit 0
+          fi
           if a="$(new_asset "$body")"; then
             echo "LIVE: $DOMAIN serves ${SHA:0:7}: its home page now loads $a, a file only this build has ($(now))"; led LIVE "$(now)"; exit 0
           fi
@@ -93,8 +118,19 @@ while :; do
         echo "DEPLOYED: your host finished the production build of ${SHA:0:7} ($(now)), but $note. Have a look at $DOMAIN yourself."
         led DEPLOYED "unconfirmed: $note"; exit 0 ;;
       failure|error)
-        echo "BUILD_FAILED: your host's production build of ${SHA:0:7} failed ($desc). The previous version is still live, but $PROD"
-        echo "now has the new commit. Fix it and run /launchcodes again, or revert it. Your host's dashboard has the build log."
+        # The deployment's own status is often terse ("Deployment was blocked"); the commit's statuses say why.
+        why="$(gh api "repos/$REPO/commits/$SHA/statuses" --jq '[.[] | select(.state == "failure" or .state == "error") | (.description // "") + "\t" + (.target_url // "")] | unique | .[0:3][]' 2>/dev/null)"
+        echo "BUILD_FAILED: your host didn't put ${SHA:0:7} live ($desc). The previous version is still live, but $PROD now has"
+        echo "the new commit."
+        if [ -n "$why" ]; then
+          echo "Your host says:"; printf '%s\n' "$why" | while IFS=$'\t' read -r d u; do echo "   $d${u:+  ($u)}"; done
+        fi
+        if printf '%s %s' "$desc" "$why" | grep -qiE 'blocked|access|permission|not allowed|unauthori|seat|limit'; then
+          echo "That is your host REFUSING the deployment (an account, team or plan setting), not a fault in your code. Fix the"
+          echo "setting at your host, then redeploy from its dashboard or run /launchcodes again."
+        else
+          echo "Fix it and run /launchcodes again, or revert it. Your host's dashboard has the build log."
+        fi
         led FAILED "$state"; exit 1 ;;
       inactive)
         echo "NOT_CONFIRMED: a newer production deployment already replaced ${SHA:0:7}. Check your host's dashboard for what's live now."

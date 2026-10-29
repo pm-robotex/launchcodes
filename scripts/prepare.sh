@@ -7,7 +7,7 @@
 # It also warns when the build could change things outside its folder, because the build runs before your yes.
 # Exit: 0 ready | 1 nothing to ship / not a fast-forward | 3 setup problem (nothing was created)
 set -u
-VERSION=0.1.0
+VERSION=0.2.0
 S="$(cd "$(dirname "$0")" && pwd)"
 die() { echo "$1"; exit "${2:-3}"; }
 abspath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$(cd "$1" && pwd)"; else (cd "$1" && pwd); fi; }
@@ -53,10 +53,22 @@ BASE="$(g rev-parse --verify -q "refs/remotes/origin/$PROD^{commit}")" || die "N
 T="$(g rev-parse --verify -q "${ARG_COMMIT:-HEAD}^{commit}")" || die "UNKNOWN COMMIT: ${ARG_COMMIT:-HEAD}"
 
 [ "$T" = "$BASE" ] && die "NOTHING_TO_SHIP: $PROD on origin already is ${T:0:7}. (Did you commit your work?)" 1
-if ! g merge-base --is-ancestor "$BASE" "$T"; then
+g merge-base --is-ancestor "$T" "$BASE" && die "NOTHING_TO_SHIP: ${T:0:7} is already part of $PROD on origin." 1
+RC="$(node "$S/cfg.mjs" "$R" releaseCommit "")" || die "$RC"
+# With "releaseCommit", every release lands as a merge commit named after it, which your branch doesn't have. That
+# is fine as long as those release commits are ALL that $PROD has beyond your branch, and they add no files of
+# their own: then $PROD's files are exactly the ones your branch started from.
+rel_only() {
+  local mb; mb="$(g merge-base "$BASE" "$T" 2>/dev/null)" || return 1
+  [ "$(g rev-parse "$BASE^{tree}")" = "$(g rev-parse "$mb^{tree}")" ] || return 1
+  ! g log --first-parent --format='%p%x09%s' "$mb..$BASE" | grep -vE '^[0-9a-f]+ [0-9a-f]+	Ship [0-9]{2}[A-Za-z]{3}-[0-9]+ ' | grep -q .
+}
+if ! g merge-base --is-ancestor "$BASE" "$T" && ! { [ "$RC" = true ] && rel_only; }; then
   echo "NOT_FAST_FORWARD: $PROD on origin has commits that ${T:0:7} doesn't have:"
   g log --format='   %h %s' "$T..$BASE" | head -10
-  echo "Bring them into your branch first (for example  git pull --rebase origin $PROD ), then run /launchcodes again."
+  echo "Your release has to sit on top of what's live. Bring those commits into your branch the way your team does"
+  echo "(merge, or rebase a branch only you use: never rewrite a branch other people share), or release a commit"
+  echo "that is built on top of $PROD with  /launchcodes <commit> . Then run /launchcodes again."
   exit 1
 fi
 
@@ -89,19 +101,30 @@ effects="$(printf '%s' "$pkg" | node -e '
     for (const [k, v] of [...Object.entries(scripts).filter(([k]) => /^(pre|post)?(install|build|prepare)$/.test(k)), ...extra])
       if (risky.test(String(v))) console.log(`   ${k}: ${v}`);
   });' "$cmds")"
-migs="$(g -c core.quotePath=false diff --name-only --diff-filter=A --no-renames "$BASE" "$T" | grep -E '(^|/)(supabase/migrations|prisma/migrations|migrations|db/migrate)/' | head -10)"
+migs="$(g -c core.quotePath=false diff --name-status --diff-filter=AM --no-renames "$BASE" "$T" | grep -E '(^|/)(supabase/migrations|prisma/migrations|migrations|db/migrate)/' \
+  | awk -F'\t' '{ print $2 ($1 == "M" ? "   <- EDITED: this file was already in an earlier release; production may need the change applied again" : "") }')"
+nmigs="$(printf '%s' "$migs" | grep -c .)"; migs="$(printf '%s\n' "$migs" | head -40)"
 if [ -n "$effects" ]; then
   echo; echo "== BUILD MAY CHANGE THINGS: these run in the build step, BEFORE your yes:"; echo "$effects"
   echo "   If they reach a real database or service, ask before building (or point them at test settings)."
 fi
-[ -n "$migs" ] && { echo; echo "== MIGRATION FILES in this release (launchcodes never applies them):"; echo "$migs" | sed 's/^/   /'; }
+if [ "$nmigs" -gt 0 ]; then
+  echo; echo "== MIGRATION FILES in this release: $nmigs (launchcodes never applies them; all must be on production first):"
+  echo "$migs" | sed 's/^/   /'; [ "$nmigs" -gt 40 ] && echo "   ... and $((nmigs - 40)) more"
+fi
+# Supabase edge functions run on Supabase, not on your host: pushing the branch doesn't deploy them.
+fns="$(g -c core.quotePath=false diff --name-only --no-renames "$BASE" "$T" | sed -nE 's#^(.*/)?supabase/functions/([^/]+)/.*#\2#p' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+if [ -n "$fns" ]; then
+  echo; echo "== EDGE FUNCTIONS changed in this release: pushing does NOT deploy them (they run on Supabase, not your host):"
+  for f in $fns; do if [ "$f" = _shared ]; then echo "   _shared (code every function that imports it uses)"; else echo "   $f"; fi; done
+fi
 
 # 4 · the launch ledger (inside .git: never committed, never pushed), other releases, leftovers
 CD="$(cd "$R" && cd "$(git rev-parse --git-common-dir)" && pwd)" && CD="$(abspath "$CD")" || die "SETUP: can't find the .git folder of $R"
 L="$CD/launchcodes"; LOG="$L/ships.log"
 mkdir -p "$L/codes" || die "SETUP: can't write $L"
 lg="$(node "$S/ledger.mjs" "$LOG")"; [ -n "$lg" ] && { echo; echo "$lg"; }
-left="$(g worktree list --porcelain | sed -n 's#^worktree \(.*/launch-[^/]*\)$#   \1#p')"
+left="$(g worktree list --porcelain | sed -n 's#^worktree \(.*/launch-[^/]*\)$#\1#p' | while IFS= read -r w; do [ -f "$w/.launch-state" ] && echo "   $w"; done)"
 [ -n "$left" ] && { echo; echo "== Clean copies from earlier runs still on disk (remove one with cleanup.sh when you're sure no chat is using it):"; echo "$left"; }
 
 day="$(date +%Y-%m-%d)"; dd="$(LC_ALL=C date +%d%b)"; CODE=""
@@ -147,9 +170,33 @@ case "$(g config --get remote.origin.url)" in
   *) LIVE="no: origin isn't on GitHub, so after the push you check your host's dashboard yourself" ;;
 esac
 
+# 7 · commits already on $PROD that your host never put live (a failed or blocked build): they go live with this
+# release, so the plan must name them. Your host's last successful production deployment, as GitHub records it.
+UNDEP=0; LIVE_SHA=""
+case "$LIVE" in yes*|partly*)
+  REPO="$(g config --get remote.origin.url | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's#\.git$##')"
+  for line in $(gh api "repos/$REPO/deployments?per_page=10" --jq '.[] | select((.environment // "") | test("production"; "i")) | "\(.id):\(.sha)"' 2>/dev/null); do
+    st="$(gh api "repos/$REPO/deployments/${line%%:*}/statuses?per_page=1" --jq '.[0].state // empty' 2>/dev/null)"
+    [ "$st" = success ] && { LIVE_SHA="${line#*:}"; break; }
+  done
+  if [ -n "$LIVE_SHA" ] && [ "$LIVE_SHA" != "$BASE" ] && g cat-file -e "$LIVE_SHA^{commit}" 2>/dev/null; then
+    if g merge-base --is-ancestor "$LIVE_SHA" "$BASE" 2>/dev/null; then
+      UNDEP="$(g rev-list --count --no-merges "$LIVE_SHA..$BASE")"
+      if [ "$UNDEP" -gt 0 ]; then
+        echo; echo "== ALSO GOING LIVE: $UNDEP commit(s) are already on $PROD, but your host never put them live (its last"
+        echo "   production build is ${LIVE_SHA:0:7}). Your host builds the newest commit, so they go live with this release:"
+        g log --no-merges --format='   %h %s' "$LIVE_SHA..$BASE" | head -10
+      fi
+    else
+      echo; echo "== YOUR HOST'S LAST PRODUCTION BUILD (${LIVE_SHA:0:7}) isn't part of $PROD's history (a rollback?). Check its dashboard."
+    fi
+  fi ;;
+esac
+
 { printf 'VERSION=%q\n' "$VERSION"; printf 'CODE=%q\n' "$CODE"; printf 'R=%q\n' "$R"; printf 'S=%q\n' "$S"; printf 'WT=%q\n' "$WT"
   printf 'PROD=%q\n' "$PROD"; printf 'BASE=%q\n' "$BASE"; printf 'T=%q\n' "$T"; printf 'TREE=%q\n' "$TREE"
-  printf 'LOG=%q\n' "$LOG"; printf 'DRY_RUN=%q\n' "$DRY"; printf 'LIVE_CHECK=%q\n' "$LIVE"; } > "$WT/.launch-state"
+  printf 'LOG=%q\n' "$LOG"; printf 'DRY_RUN=%q\n' "$DRY"; printf 'LIVE_CHECK=%q\n' "$LIVE"
+  printf 'RELEASE_COMMIT=%q\n' "$RC"; printf 'EDGE_FNS=%q\n' "$fns"; printf 'UNDEPLOYED=%q\n' "$UNDEP $LIVE_SHA"; } > "$WT/.launch-state"
 note="${T:0:7}"; [ "$DRY" = 1 ] && note="$note dry-run"
 printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" PREPARED "$note" >> "$LOG"
 

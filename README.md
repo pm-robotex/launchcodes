@@ -11,21 +11,26 @@ Then it waits for your host's production build and, if you tell it your domain, 
 
 Distilled from the release process behind 23+ real production releases of a React + Supabase ERP.
 
-> **v0.1.0, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put real
-> releases live on a Vercel site. Other hosts are untested: if you use one, please tell us how it went. Read the
-> scripts before you trust them with production: they're short, and each one says what it does at the top.
+> **v0.2.0, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
+> than ten real releases live on two Vercel sites. Other hosts are untested: if you use one, please tell us how it
+> went. Read the scripts before you trust them with production: they're short, and each one says what it does at the top.
 
 ## A release, start to finish
 
 ```
 > /launchcodes
 
+  Releases ready to go live on main:
+    1  fix-login       2 commits · 14 Oct 16:40
+    2  pricing-page    1 commit  · 13 Oct 11:02
+  > 1 · fix-login
+
   Ship 14Oct-2 · Fix login redirect: ready to put 2 commits live on www.example.com. Nothing has gone live yet.
   - "Fix login redirect loop": signed-out users no longer bounce between /login and /home
   - "Add forgot-password link": a link under the login button
   Checks: build ✓ · secret files ✓ · keys in code ✓ · code check ✓ · database ✓
-  When you say yes: Claude Code asks you to approve one command, "Ship 14Oct-2 · PUSH to main (production)".
-  That is the launch: choose Yes.
+  When you say yes: Claude Code asks you to approve one command,
+  "Ship 14Oct-2 · Fix login redirect · PUSH to main (production)". That is the launch: choose Yes.
 
   Ship 14Oct-2 · Fix login redirect: put 2 commits live on www.example.com?
   > Launch 14Oct-2
@@ -34,12 +39,16 @@ Distilled from the release process behind 23+ real production releases of a Reac
   Ship 14Oct-2 · Fix login redirect: Live ✅ www.example.com serves it (17:01 CEST).
 ```
 
-Every release gets a launch code: the date plus its number that day, like `14Oct-2`. It appears in the plan, the
-question, the push prompt and the report, so two releases in one afternoon, or two Claude sessions on one repo,
-can't be mixed up.
+`/launchcodes` on its own lists the releases that are ready (branches whose newest commits can go live on top of
+what's live) and you pick one; Claude never guesses from the conversation. `/launchcodes <commit id>` releases that
+commit (and the ones before it). Try it first with **`/launchcodes dry-run`**: every check and the plan, and
+nothing is pushed.
 
-Try it first with **`/launchcodes dry-run`**: every check and the plan, and nothing is pushed.
-`/launchcodes <commit id>` releases that commit (and the ones before it) instead of your latest.
+Every release gets a launch code, the date plus its number that day, like `14Oct-2`, and a short name. They appear
+in the plan, the question, the push prompt and the report, so two releases in one afternoon, or two Claude sessions
+on one repo, can't be mixed up. Set `"releaseCommit": true` and the name reaches your host and GitHub too: each
+release lands as one merge commit titled `Ship 14Oct-2 · Fix login redirect`, which is what Vercel's Deployments
+list (and its Instant Rollback) and GitHub's commit list show.
 
 ## What it checks, and why
 
@@ -55,12 +64,17 @@ Try it first with **`/launchcodes dry-run`**: every check and the plan, and noth
   passwords. Public keys (the Supabase anon key, Firebase web keys) pass, because they're meant to be public.
 - **Works on test, broken live (Supabase).** Your code reads a column that exists on your test database but not
   on production. launchcodes writes one read-only query that checks production has every table, column, function
-  and storage bucket the new code uses, and Claude runs it, or you paste it into the SQL editor.
+  and storage bucket the new code uses (including the columns of rows it writes, when they're built in a variable or
+  a helper function in the same file), and Claude runs it, or you paste it into the SQL editor. It lists the
+  release's migration files, edited ones included, and its changed **edge functions**, which a push never deploys.
 - **"It returned 200, so it's live."** Single-page apps answer 200 for every address. launchcodes waits for your
   host's production deployment of that exact commit and, if you set your domain, checks what the domain serves:
-  its home page must now load a file only this build made (bundlers put a content hash in file names, like
-  `index-DZhMrgGv.js`), or match the new deployment's fingerprint. When it can't be sure, it says "Published", with
-  the reason, instead of "Live".
+  its page or main script must carry this release's commit id (many builds stamp it), or load a file only this
+  build made (bundlers put a content hash in file names, like `index-DZhMrgGv.js`), or match the new deployment's
+  fingerprint. When it can't be sure, it says "Published", with the reason, instead of "Live". When your host
+  refuses a deployment, it shows your host's own reason and link.
+- **A release that quietly carries an older one.** If an earlier push to production never went live (its build
+  failed or was blocked), your host builds it together with this release. launchcodes lists those commits too.
 - **Someone else pushed in the meantime.** The push refuses, and nothing is overwritten. It never uses `--force`.
 
 ## Works with
@@ -150,6 +164,7 @@ refused on purpose: put your own, and delete every key you don't need.
 | `codeCheck` | `true` | `false` switches the JS code check off |
 | `lintGlobals` | none | global names your page gets from a `<script>` tag or from your bundler's settings |
 | `workDir` | see below | an absolute folder for the clean copies (machine-specific: then don't commit the file) |
+| `releaseCommit` | `false` | `true` lands each release as one merge commit titled `Ship <code> · <name>`, so your host's deployment list and GitHub show the release's name. It holds exactly the built files; your branch doesn't get it, and the next release still lines up. Your host must build a commit that changes no files of its own (Vercel does by default; an "Ignored Build Step" that skips such commits would stop it) |
 
 `neverShip` and `allowPaths` are regular expressions (search patterns), not `.gitignore` patterns: write
 `"\\.sqlite$"`, not `"*.sqlite"` (in JSON, a backslash is written twice). A mistake in this file stops the release
@@ -169,9 +184,11 @@ branch runs it.
   not a test suite or CI.
 - Differences between the clean copy's build and your host's build settings, such as environment variables. (The
   live check then can't match this build's files on your domain, and says "Published" rather than "Live".)
-- Supabase: row-level security policies (the per-row access rules; only table and function permissions are
-  checked), table names built at runtime (listed for you to read), schemas other than `public`, and edge functions
-  (listed, not checked). Other databases aren't checked at all.
+- Supabase: the database check proves names exist (tables, columns, functions and their arguments), not that a
+  function's body is the new one: "database ✓" doesn't prove every migration ran, so compare your production
+  migration history with the release's list. Also not checked: row-level security policies (the per-row access
+  rules; only table and function permissions are), table names built at runtime (listed for you to read), schemas
+  other than `public`, and edge functions (listed, never deployed or compared). Other databases aren't checked at all.
 - It never changes your database itself. Your build might (see above), and if your CI or host applies migrations
   when the branch is pushed, the push does.
 - It releases one line of commits to one production branch, added on top of what's live. Merges, pull requests and
@@ -204,12 +221,13 @@ and why.
 
 | script | what it does |
 |---|---|
-| `prepare.sh` | checks your tools, works out the commits, warns about uncommitted files and risky build scripts, gives the launch code, makes the clean copy |
+| `candidates.sh` | with no commit given: lists the releases that are ready, numbered, for you to pick |
+| `prepare.sh` | checks your tools, works out the commits, warns about uncommitted files, risky build scripts, migration files, edge functions and earlier commits your host never put live, gives the launch code, makes the clean copy |
 | `build.sh` | installs from your lockfile and builds; records the built tree only if both pass |
 | `check.sh` | runs `never_ships.mjs`, `secret_scan.mjs`, `scope_lint.mjs` and, for Supabase, `db_refs.mjs` + `refcheck_sql.mjs` |
 | `plan.sh` | records the release's name and the exact file list you are approving |
-| `push.sh` | pushes only if: the code matches, it's built, checked and planned, the files match your approval, the secret checks still pass, and nobody pushed or rolled back meanwhile |
-| `wait_live.sh` | waits for your host's production deployment, then checks your domain serves it: a file only this build made, or the same fingerprint (`etag.sh`) |
+| `push.sh` | pushes only if: the code matches, it's built, checked and planned, the files match your approval, the secret checks still pass, and nobody pushed or rolled back meanwhile; with `releaseCommit`, it pushes the merge commit named after the release |
+| `wait_live.sh` | waits for your host's production deployment, then checks your domain serves it: this release's commit id, a file only this build made, or the same fingerprint (`etag.sh`); a refused deployment comes with your host's reason |
 | `cleanup.sh` | removes the clean copy |
 
 ## Contributing

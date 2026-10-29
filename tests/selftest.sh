@@ -37,14 +37,17 @@ if [ "$1" = auth ]; then [ "$mode" = off ] && exit 1; exit 0; fi
 case "$2" in
   */compare/*) echo identical ;;
   *deployments\?sha=*) [ "$mode" = none ] || echo 101 ;;
+  *deployments\?per_page=*) [ -n "${STUB_LIVE_SHA:-}" ] && echo "202:$STUB_LIVE_SHA" ;;   # production deployments, newest first
+  */deployments/202/statuses*) echo success ;;
   */deployments/101/statuses*)
     case "$mode" in
       success)  printf '2026-10-14T10:00:00Z\tsuccess\thttps://deploy-1.launchcodes-test.dev\t-\n' ;;
-      failure)  printf '2026-10-14T10:00:00Z\tfailure\t-\tbuild error\n' ;;
+      failure)  printf '2026-10-14T10:00:00Z\tfailure\t-\tDeployment was blocked\n' ;;
       inactive) printf '2026-10-14T10:00:00Z\tinactive\t-\t-\n' ;;
       pending)  printf '2026-10-14T10:00:00Z\tpending\t-\t-\n' ;;
     esac ;;
-  */statuses) echo 0 ;;
+  */statuses)   # a commit's statuses: counted (length), or read for the reason a deployment failed
+    case "$*" in *length*) echo 0 ;; *) [ "$mode" = failure ] && printf 'Git author test must have access to the project on Vercel to create deployments.\thttps://vercel.com/test/help\n' ;; esac ;;
 esac
 EOF
 # Stand-in for curl, as etag.sh calls it: the home page of the domain or of a deployment, with a canned status, ETag
@@ -55,8 +58,9 @@ out=/dev/null; prev=""
 for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; url="$a"; done
 case " $* " in *" --help "*) exit 0 ;; esac
 case "$url" in
-  *deploy-*) st="${STUB_DEPLOY_STATUS:-200}"; tag="${STUB_DEPLOY_ETAG:-}"; body="" ;;
-  *)         st="${STUB_DOMAIN_STATUS:-200}"; tag="${STUB_DOMAIN_ETAG:-}"; body="${STUB_DOMAIN_BODY:-}" ;;
+  *deploy-*)  st="${STUB_DEPLOY_STATUS:-200}"; tag="${STUB_DEPLOY_ETAG:-}"; body="" ;;
+  */assets/*) st=200; tag=""; body="${STUB_ASSET_BODY:-}" ;;
+  *)          st="${STUB_DOMAIN_STATUS:-200}"; tag="${STUB_DOMAIN_ETAG:-}"; body="${STUB_DOMAIN_BODY:-}" ;;
 esac
 printf '%s' "$body" > "$out"
 printf 'HTTP/1.1 %s X\r\n' "$st"; [ -n "$tag" ] && printf 'ETag: "%s"\r\n' "$tag"; printf '\r\n'
@@ -315,7 +319,9 @@ export GH_STUB=off; expect "the live check says so when gh is missing" 6 NO_GH b
 git -C "$P" config remote.origin.url https://github.com/test/launch.git
 git -C "$P" config "url.$(winpath "$P.git").insteadOf" https://github.com/test/launch.git
 export GH_STUB=success; expect "with no domain set, the live check reports DEPLOYED" 0 DEPLOYED bash "$S/wait_live.sh" "$WT" 60
-export GH_STUB=failure; expect "the live check reports a failed host build" 1 BUILD_FAILED bash "$S/wait_live.sh" "$WT" 60
+export GH_STUB=failure; out="$(bash "$S/wait_live.sh" "$WT" 60 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q BUILD_FAILED <<<"$out" && ok "the live check reports a failed host build" || bad "the live check reports a failed host build" "exit $rc: $out"
+grep -q "must have access" <<<"$out" && grep -q "vercel.com/test/help" <<<"$out" && grep -q REFUSING <<<"$out" && ok "and gives the host's own reason, link, and that it's a setting, not the code" || bad "and gives the host's own reason" "$out"
 export GH_STUB=none; expect "the live check gives up when no deployment is reported" 4 NO_DEPLOYMENT_REPORTED env POLL=1 GRACE=2 bash "$S/wait_live.sh" "$WT" 60
 export GH_STUB=off
 PCODE="$CODE"; bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
@@ -343,7 +349,12 @@ expect "LIVE when the home page loads a file only this build made, even behind a
 mv "$WT/.launch-before.html" "$WT/.launch-before.bak"
 expect "without the page from before the push, that file is not proof" 0 "DEPLOYED" bash "$S/wait_live.sh" "$WT" 30
 mv "$WT/.launch-before.bak" "$WT/.launch-before.html"
-unset STUB_DEPLOY_STATUS STUB_DOMAIN_BODY
+pushed7="$(git -C "$V" rev-parse --short=7 origin/main)"
+export STUB_DOMAIN_BODY='<script type="module" crossorigin src="/assets/main-Zz9.js"></script>' STUB_ASSET_BODY="const BUILD=\"$pushed7\";"
+expect "LIVE when the page's main script carries this release's commit id" 0 "carries this release's commit id" bash "$S/wait_live.sh" "$WT" 30
+export STUB_ASSET_BODY='const BUILD="0000000";'
+expect "another commit id in the script is not proof" 0 "DEPLOYED" bash "$S/wait_live.sh" "$WT" 30
+unset STUB_DEPLOY_STATUS STUB_DOMAIN_BODY STUB_ASSET_BODY
 export GH_STUB=inactive; expect "a deployment replaced by a newer one is NOT_CONFIRMED" 5 "replaced" bash "$S/wait_live.sh" "$WT" 30
 export GH_STUB=pending; expect "a build that never finishes times out" 2 TIMEOUT env POLL=1 bash "$S/wait_live.sh" "$WT" 2
 export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP
@@ -354,6 +365,81 @@ full "$Q"; expect "a push the server refuses is reported, and nothing changes" 1
 bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
 full "$Q" --dry-run; expect "a dry run is never pushed" 1 "dry run" bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
 bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+
+# --- choosing a release, and what else a release carries -------------------------------------------------------
+K="$(new_app choose)"
+expect "with nothing ready, the list says so" 1 NOTHING_READY bash "$S/candidates.sh" "$K"
+git -C "$K" checkout -q -b feat-a; commit "$K" a.txt a "feature a"
+git -C "$K" checkout -q main; git -C "$K" checkout -q -b old-work; commit "$K" c.txt c "older work"; git -C "$K" checkout -q main
+git clone -q "$K.git" "$ROOT/choose-other" 2>/dev/null; commit "$ROOT/choose-other" moved.txt m "main moves on"; git -C "$ROOT/choose-other" push -q origin HEAD:main
+git -C "$K" fetch -q origin
+git -C "$K" checkout -q -b feat-b origin/main; commit "$K" b.txt b "feature b, on the newest main"
+git -C "$K" checkout -q -b feat-c origin/main; commit "$K" d.txt d "feature c, on the newest main"; git -C "$K" checkout -q main
+out="$(bash "$S/candidates.sh" "$K" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q "RELEASES READY: 2" <<<"$out" && grep -qE "^  [12]  feat-b " <<<"$out" && grep -qE "^  [12]  feat-c " <<<"$out" \
+  && grep -qE "^PICK [12] = $(git -C "$K" rev-parse feat-c)$" <<<"$out" && grep -q "NOT LISTED: 2 other" <<<"$out" \
+  && ok "a bare /launchcodes lists only the releases that sit on top of what's live, numbered, with their commit ids" || bad "the release list" "exit $rc: $out"
+git -C "$K" fetch -q origin; git -C "$K" reset -q --hard origin/main
+
+W2="$(new_app carries)"; mkdir -p "$W2/supabase/migrations"
+commit "$W2" supabase/migrations/20260101000000_first.sql "create table t (id int);" "a migration"; git -C "$W2" push -q origin main
+commit "$W2" supabase/migrations/20260101000000_first.sql "create table t (id int, name text);" "edit the migration"
+commit "$W2" supabase/migrations/20260102000000_second.sql "create table u (id int);" "a second migration"
+commit "$W2" supabase/functions/hello/index.ts "export default () => new Response('hi');" "an edge function"
+prep "$W2"
+grep -q "EDGE FUNCTIONS changed" <<<"$OUT" && grep -q "^   hello$" <<<"$OUT" && ok "prepare lists the edge functions a push won't deploy" || bad "prepare lists the edge functions" "$OUT"
+grep -q "MIGRATION FILES in this release: 2" <<<"$OUT" && grep -q "20260101000000_first.sql   <- EDITED" <<<"$OUT" && ok "and the migration files, an edited one marked as such" || bad "and the migration files, an edited one marked" "$OUT"
+bash "$S/build.sh" "$WT" >/dev/null 2>&1; bash "$S/check.sh" "$WT" >/dev/null 2>&1
+expect "the plan repeats the edge functions" 0 "EDGE FUNCTIONS changed, which pushing does NOT deploy: hello" bash "$S/plan.sh" "$WT" --name 'Hello function'
+done_with "$W2"
+
+U="$(new_app undeployed)"; live0="$(git -C "$U" rev-parse HEAD)"
+git -C "$U" config remote.origin.url https://github.com/test/undeployed.git
+git -C "$U" config "url.$(winpath "$U.git").insteadOf" https://github.com/test/undeployed.git
+commit "$U" blocked.txt b "the release the host refused"; git -C "$U" push -q origin main
+commit "$U" next.txt n "the next release"
+export GH_STUB=success STUB_LIVE_SHA="$live0"; prep "$U"; export GH_STUB=off; unset STUB_LIVE_SHA
+grep -q "ALSO GOING LIVE: 1 commit" <<<"$OUT" && grep -q "the release the host refused" <<<"$OUT" && ok "commits already on production that the host never put live are named" || bad "commits the host never put live are named" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+git -C "$U" worktree add -q --detach "$WORK/launch-not-ours" HEAD 2>/dev/null
+prep "$U"; ! grep -q "launch-not-ours" <<<"$OUT" && ok "another tool's launch-* folder isn't listed as a leftover clean copy" || bad "another tool's launch-* folder isn't listed" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1; git -C "$U" worktree remove --force "$WORK/launch-not-ours" 2>/dev/null
+
+Y="$(new_app named)"; cfgset "$Y" ', "releaseCommit": true'; git -C "$Y" add -A; git -C "$Y" commit -q -m "release commits on"; git -C "$Y" push -q origin main
+commit "$Y" one.txt 1 "first feature"; T1="$(git -C "$Y" rev-parse HEAD)"; B1="$(git -C "$Y" rev-parse origin/main)"
+full "$Y"; [ "$FULL_RC" = 0 ] || bad "release-commit setup" "step $FULL_RC: $OUT $CHECK_OUT"
+grep -q "release commit: they land under one merge commit" <<<"$(bash "$S/plan.sh" "$WT" --name 'Test release' 2>&1)" && ok "the plan names the release commit" || bad "the plan names the release commit" "$(bash "$S/plan.sh" "$WT" --name 'Test release' 2>&1)"
+expect "with releaseCommit, the release is pushed" 0 "PUSHED_OK  Ship $CODE · Test release" bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
+M1="$(git -C "$Y" rev-parse origin/main)"
+[ "$(git -C "$Y" log -1 --format=%s "$M1")" = "Ship $CODE · Test release" ] && [ "$(git -C "$Y" rev-parse "$M1^1")" = "$B1" ] && [ "$(git -C "$Y" rev-parse "$M1^2")" = "$T1" ] && [ "$(git -C "$Y" rev-parse "$M1^{tree}")" = "$(git -C "$Y" rev-parse "$T1^{tree}")" ] \
+  && ok "it lands as one merge commit named after the release, holding exactly the built files" || bad "the release commit" "$(git -C "$Y" log -3 --format='%h %p %s' "$M1")"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+commit "$Y" two.txt 2 "second feature, on a branch without the release commit"
+prep "$Y"; [ "$RC" = 0 ] && grep -q "== 1 commit(s) would go live" <<<"$OUT" && ok "the next release lines up although the branch lacks the release commit" || bad "the next release lines up" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+git clone -q "$Y.git" "$ROOT/named-other" 2>/dev/null; commit "$ROOT/named-other" theirs.txt t "someone else's real change"; git -C "$ROOT/named-other" push -q origin HEAD:main
+expect "a real change on production that the branch lacks still stops it" 1 NOT_FAST_FORWARD bash "$S/prepare.sh" "$Y"
+git -C "$Y" reset -q --hard "$T1"
+expect "a commit that is already part of production has nothing to ship" 1 NOTHING_TO_SHIP bash "$S/prepare.sh" "$Y"
+
+J="$(new_app supa-rows)"
+printf '{ "name": "t", "version": "1.0.0", "private": true, "scripts": { "build": "node build.js" }, "dependencies": { "@supabase/supabase-js": "^2.0.0" } }\n' > "$J/package.json"
+git -C "$J" commit -q -am "use supabase"; git -C "$J" push -q origin main; cfgset "$J" ', "installCommand": "true"'
+read -r -d '' JSRC <<'JS'
+function buildRow(x) {
+  const flag = (c) => { return { on: c, rate: 1 }; };
+  return { name: x, gift_wrap: flag(true).on };
+}
+export async function save(supabase, x) { const row = buildRow(x); return supabase.from('orders').insert([row]); }
+export async function bulk(supabase, xs) { const rows = xs.map((x) => ({ total: x })); return supabase.from('orders').insert(rows); }
+export async function other(supabase, x) { return supabase.from('orders').upsert(makeRows(x)); }
+JS
+commit "$J" src/save.js "$JSRC" "save orders"
+prep "$J"; bash "$S/build.sh" "$WT" >/dev/null 2>&1; out="$(bash "$S/check.sh" "$WT" 2>&1)"; refs="$(cat "$WT/.launch-refs.json" 2>/dev/null)"
+grep -q '"n":"gift_wrap"' <<<"$refs" && grep -q '"n":"name"' <<<"$refs" && grep -q '"n":"total"' <<<"$refs" && ok "the database check reads rows built by a helper function or a .map()" || bad "rows built elsewhere are read" "$refs"
+! grep -qE '"n":"(on|rate)"' <<<"$refs" && ok "but not what a function inside that helper returns" || bad "an inner function's return is not a row" "$refs"
+grep -q "DYNAMIC.*orders.upsert" <<<"$out" && ok "a row it can't trace is listed for a person to read" || bad "an untraceable row is listed" "$out"
+done_with "$J"
 
 # --- optional: the code check end to end (needs the network to install ESLint) ---------------------------------
 if [ "${LAUNCHCODES_FULL:-0}" = 1 ]; then

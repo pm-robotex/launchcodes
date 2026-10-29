@@ -68,17 +68,17 @@ try {
     }
     return src.length;
   };
-  const topKeys = (obj) => {          // top-level keys of an object literal
-    const keys = []; let depth = 0, tok = '', spread = false;
-    const flush = () => { const t = tok.trim(); tok = ''; if (!t) return; if (t.startsWith('...')) { spread = true; return; }
-      const m = t.match(/^\[?['"]?([A-Za-z_]\w*)['"]?\]?\s*(:|$)/); if (m) keys.push(m[1]); };
+  const topKeys = (obj) => {          // top-level keys of an object literal, each with its offset inside obj
+    const keys = [], offs = []; let depth = 0, tok = '', start = -1, spread = false;
+    const flush = () => { const t = tok.trim(), at0 = start; tok = ''; start = -1; if (!t) return; if (t.startsWith('...')) { spread = true; return; }
+      const m = t.match(/^\[?['"]?([A-Za-z_]\w*)['"]?\]?\s*(:|$)/); if (m) { keys.push(m[1]); offs.push(at0); } };
     for (let i = 1; i < obj.length - 1; i++) {
       const c = obj[i];
-      if (c === "'" || c === '"' || c === '`') { const j = skipString(obj, i); if (depth === 0) tok += obj.slice(i, j + 1); i = j; continue; }
+      if (c === "'" || c === '"' || c === '`') { const j = skipString(obj, i); if (depth === 0) { if (start < 0) start = i; tok += obj.slice(i, j + 1); } i = j; continue; }
       if ('([{'.includes(c)) depth++; else if (')]}'.includes(c)) depth--;
-      if (depth === 0 && c === ',') flush(); else if (depth === 0) tok += c;
+      if (depth === 0 && c === ',') flush(); else if (depth === 0) { if (start < 0 && !/\s/.test(c)) start = i; tok += c; }
     }
-    flush(); return { keys, spread };
+    flush(); return { keys, offs, spread };
   };
   const selectCols = (s) => {         // PostgREST select string -> columns + embedded relations
     const cols = [], embeds = []; let depth = 0, cur = '';
@@ -100,6 +100,7 @@ try {
     return o.join('');
   };
   const CRUD = /\.(select|insert|update|upsert|delete)\s*\(/;
+  const reEsc = (s) => s.replace(/[$]/g, '\\$');
 
   for (const file of files) {
     let raw; try { raw = git('show', `${target}:${file}`); } catch { continue; }
@@ -107,6 +108,43 @@ try {
     const isAdded = (off) => added.has(lineOf(off)), at = (off) => `${file}:${lineOf(off)}`;
     const consts = {};
     for (const m of src.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"`])([^'"`]*?)\2/g)) if (!m[3].includes('${')) consts[m[1]] = m[3];
+    // Where a row written by .insert(x) / .update(x) / .upsert(x) comes from, when it isn't written right there:
+    // object literals assigned or pushed to x, or returned by the function x was set from (one level), in this file.
+    // Returns the offsets of their opening braces.
+    const returnsOf = (fn) => {
+      const out = [];
+      for (const d of src.matchAll(new RegExp(`function\\s+${reEsc(fn)}\\s*\\(|(?:const|let|var)\\s+${reEsc(fn)}\\s*=`, 'g'))) {
+        const head = src.slice(d.index, d.index + 300);
+        const expr = head.match(/=>\s*\(\s*\{/);                       // (r) => ({ ... })
+        const body = head.match(/(?:=>|\))\s*\{/);                     // (r) => { ... } or function f(r) { ... }
+        if (expr && (!body || expr.index <= body.index)) { out.push(d.index + expr.index + expr[0].length - 1); break; }
+        if (!body) continue;
+        const open = d.index + body.index + body[0].length - 1, close = balanced(src, open);
+        const inner = [];                                              // functions defined inside it return their own things
+        for (const f of src.slice(open + 1, close).matchAll(/=>\s*\{|\bfunction\b[^{(]*\([^)]*\)\s*\{/g)) {
+          const o = open + 1 + f.index + f[0].length - 1; inner.push([o, balanced(src, o)]);
+        }
+        for (const r of src.slice(open, close).matchAll(/\breturn\s*\(?\s*\{/g)) {
+          const pos = open + r.index;
+          if (!inner.some(([a, b]) => pos > a && pos < b)) out.push(open + r.index + r[0].length - 1);
+        }
+        break;
+      }
+      return out;
+    };
+    const literalsOf = (id, before) => {   // only the LAST assignment to id before the call, and pushes after it
+      const v = reEsc(id), out = [];
+      const defs = [...src.matchAll(new RegExp(`(?<![\\w$.])${v}\\s*=(?![=>])`, 'g'))].filter((d) => d.index < before);
+      if (!defs.length) return out;
+      const d = defs[defs.length - 1], rhs = src.slice(d.index + d[0].length, d.index + d[0].length + 200);
+      let r;
+      if ((r = /^\s*\[?\s*\{/.exec(rhs))) out.push(d.index + d[0].length + r[0].length - 1);
+      else if ((r = /^\s*(?:await\s+)?([A-Za-z_$][\w$]*)\s*\(/.exec(rhs)) && !/\.map$/.test(r[1])) out.push(...returnsOf(r[1]));
+      if ((r = /^[^;\n]{0,160}?=>\s*\(\s*\{/.exec(rhs))) out.push(d.index + d[0].length + r[0].length - 1);
+      for (const p of src.matchAll(new RegExp(`(?<![\\w$.])${v}\\.push\\(\\s*\\{`, 'g')))
+        if (p.index > d.index && p.index < before) out.push(p.index + p[0].length - 1);
+      return [...new Set(out)];
+    };
 
     for (const m of src.matchAll(/\.from\(\s*(?:(['"`])([\w-]+)\1|([A-Za-z_$][\w$.]*))\s*\)/g)) {
       const before = src.slice(Math.max(0, m.index - 40), m.index);
@@ -128,9 +166,23 @@ try {
         if (!f[3].includes('.')) colRef(f[3], m.index + f.index);
       for (const f of seg.matchAll(/onConflict:\s*(['"`])([\w, ]+)\1/g)) f[2].split(',').forEach((c) => colRef(c.trim(), m.index + f.index));
       for (const w of seg.matchAll(/\.(update|insert|upsert)\(\s*\[?\s*\{/g)) {
-        const open = m.index + w.index + w[0].length - 1, { keys, spread } = topKeys(src.slice(open, balanced(src, open) + 1));
-        keys.forEach((k) => colRef(k, open));
+        const open = m.index + w.index + w[0].length - 1, { keys, offs, spread } = topKeys(src.slice(open, balanced(src, open) + 1));
+        keys.forEach((k, i) => colRef(k, open + offs[i]));
         if (spread && (headAdded || isAdded(open))) dynamic.push(`${at(open)} ${t}.${w[1]}({...spread})`);
+      }
+      for (const w of seg.matchAll(/\.(update|insert|upsert)\(/g)) {   // the row comes from somewhere else
+        const paren = m.index + w.index + w[0].length - 1, arg = src.slice(paren + 1, balanced(src, paren));
+        if (/^\s*\[?\s*\{/.test(arg)) continue;                          // written right here: done above
+        const callAdded = headAdded || isAdded(paren);
+        const id = arg.match(/^\s*\[?\s*([A-Za-z_$][\w$]*)\s*\]?\s*(?:,[\s\S]*)?$/);
+        const arrow = /=>\s*\(\s*\{/.exec(arg);
+        const objs = id ? literalsOf(id[1], paren) : arrow ? [paren + 1 + arrow.index + arrow[0].length - 1] : [];
+        let spread = false;
+        for (const open of objs) {
+          const r = topKeys(src.slice(open, balanced(src, open) + 1)); spread = spread || r.spread;
+          r.keys.forEach((k, i) => { const off = open + r.offs[i]; if (callAdded || isAdded(off)) colRef(k, callAdded ? paren : off); });
+        }
+        if (callAdded && (!objs.length || spread)) dynamic.push(`${at(paren)} ${t}.${w[1]}(${id ? id[1] : '...'}): its columns come from elsewhere`);
       }
       if (any) add({ k: 'table', n: t }, at(m.index));
     }

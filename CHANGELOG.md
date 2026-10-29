@@ -2,6 +2,27 @@
 
 Safety fixes are marked **safety**. Update with `git -C ~/.claude/skills/launchcodes pull`.
 
+## 0.2.0 (October 2026)
+
+From the first ten real releases with launchcodes.
+
+- `/launchcodes` on its own lists the releases that are ready, numbered, and you pick one. Claude no longer
+  guesses which commit you meant from the conversation.
+- **safety** Changed Supabase edge functions are listed: a push never deploys them.
+- **safety** Edited migration files are listed with the new ones (an edit to a file that already ran may need
+  applying again).
+- **safety** Commits already on the production branch that your host never put live (a failed or blocked build)
+  are listed: they go live with this release.
+- **safety** The database check reads the columns of rows built in a variable or a helper function in the same
+  file, and checks each written column on its own line. One release had added a column this way unseen.
+- Live check: "Live" when your page or its main script carries this release's commit id. A refused deployment
+  shows your host's own reason and link, and says when it's a setting rather than your code.
+- New setting `releaseCommit`: each release lands as one merge commit titled `Ship <code> · <name>`, so your host's
+  deployment list and GitHub show the release's name.
+- The push prompt shows the release's name next to its launch code.
+- The "clean copies left over" list shows only launchcodes' own; the not-on-top-of-production message no longer
+  suggests rewriting a shared branch.
+
 ## 0.1.0 (October 2026)
 
 First public release.

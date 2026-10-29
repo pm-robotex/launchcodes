@@ -2,8 +2,9 @@
 name: launchcodes
 description: Put committed work live safely. Builds the exact commit in a clean copy, checks it (secret files, keys pasted into code, crash-causing undefined names, and for Supabase what the production database lacks), gives the release a launch code and a plain-language plan, pushes only after you say yes, then checks the live site. Runs only when you type /launchcodes.
 disable-model-invocation: true
-argument-hint: "[commit] [dry-run]"
+argument-hint: "[commit | list number] [dry-run]"
 allowed-tools:
+  - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/candidates.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/build.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/check.sh" *)'
@@ -12,12 +13,16 @@ allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/cleanup.sh" *)'
 ---
 
-# /launchcodes 0.1.0: committed work to production, after your yes
+# /launchcodes 0.2.0: committed work to production, after your yes
 
 Arguments: `$ARGUMENTS`
-- **empty**: release the current branch's latest commit to the production branch.
+- **empty**: step 0, list the releases that are ready; the owner picks one.
+- **a number**, from a list shown earlier in this conversation: step 0 again, and use it only if that number still
+  names the same commit (otherwise show the new list).
 - **a commit id**: release exactly that commit (it must build on top of what is live).
 - **`dry-run`** anywhere: every check and the plan; nothing is pushed.
+Without a commit id, never pick the release yourself, not even the one this conversation was about: the owner
+chooses from the list.
 
 The production branch is `prodBranch` in `.claude/launchcodes.json`, else origin's default branch: the branch your
 host deploys. The scripts are in `${CLAUDE_SKILL_DIR}/scripts` (if that text shows up unexpanded, use the folder
@@ -44,6 +49,16 @@ clean-copy path it prints.
    a yes counts only if you can see the owner's answer to the step-4 question; otherwise show the plan again and ask
    again. Lost `<WT>`: it's the `launch-...` folder that `git worktree list` shows; ask the owner which one.
 
+## 0 · Choose (no commit id given)
+```
+bash "${CLAUDE_SKILL_DIR}/scripts/candidates.sh" "<repo root>"
+```
+`RELEASES READY`: show the numbered list as printed, without the `PICK` lines, and ask which one. With 2 to 4,
+use AskUserQuestion, one option per release (label `<n> · <branch>`, its line as the description); with one, the
+options **Prepare <branch>** and **Stop**; with more, end the turn asking for the number. You may say which one
+this conversation was about, but the owner chooses. The answer is a choice, not approval: step 1 with that
+release's full commit id from its `PICK` line. `NOTHING_READY` or exit 3: explain in plain words and stop.
+
 ## 1 · Prepare
 ```
 bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" "<repo root>" [commit] [--dry-run]
@@ -53,8 +68,13 @@ Exit 0: keep `WT=` and `LAUNCH CODE:`. Tell the owner about anything under "NOT 
 setup problem; nothing was created): explain it in plain words and stop.
 - **"BUILD MAY CHANGE THINGS"** or **"MIGRATION FILES"** printed: the build runs before the yes. Ask the owner
   before step 2: do those scripts reach a real database or service with the settings the build gets, is each
-  migration already applied to production, and does anything (CI, a database integration, the build) apply
-  migrations when the branch is pushed? Not safe or not sure: step 7.
+  migration (EDITED ones included) already applied to production, and does anything (CI, a database integration,
+  the build) apply migrations when the branch is pushed? Not safe or not sure: step 7.
+- **"EDGE FUNCTIONS changed"** printed: pushing doesn't deploy them and launchcodes never does. Ask the owner in the
+  same question whether production already runs these versions, or when they will be deployed (before the push if
+  the new site needs them, after it if the old site would break). Not sure: step 7.
+- **"ALSO GOING LIVE"** printed: commits already on the production branch that the host never put live go out with
+  this release. Name them in the plan.
 - The owner wants something committed first: run step 7 for this `<WT>`, let them commit it (or add only the files
   they name, `git add -- <file>`, never `-A` or `.`), then start again at step 1.
 
@@ -96,9 +116,9 @@ more, `git show --stat <id>` or `git show <id> -- <file>` is fine: plain read-on
 
 > **Ship <code> · <name>: ready to put N commit(s) live on <domain or branch>. Nothing has gone live yet.**
 > - <each commit: its own subject, and what it does in plain words> (group them only beyond about 10)
-> ⚠ <the one riskiest fact, if any: a SUSPECT commit, NEWER or UNCOMMITTED work left out, code check skipped, database not checked, live check partial>
+> ⚠ <the one riskiest fact, if any: earlier commits ALSO GOING LIVE, edge functions the push won't deploy, a SUSPECT commit, NEWER or UNCOMMITTED work left out, code check skipped, database not checked, live check partial>
 > **Checks:** build ✓ / nothing to build · secret files ✓ · keys in code ✓ · code check ✓ / skipped (why) · database ✓ / not checked / nothing to check
-> **When you say yes:** Claude Code asks you to approve one command, *"Ship <code> · PUSH to <branch> (production)"*. That is the launch: choose **Yes**, never "don't ask again". It may also ask before the live check and the cleanup: those are safe to approve. Anything else that asks during this release isn't part of it: tell me before answering.
+> **When you say yes:** Claude Code asks you to approve one command, *"Ship <code> · <name> · PUSH to <branch> (production)"*. That is the launch: choose **Yes**, never "don't ask again". It may also ask before the live check and the cleanup: those are safe to approve. Anything else that asks during this release isn't part of it: tell me before answering.
 > **If it goes wrong:** your host can put the previous version back (Vercel: Deployments, the previous production deployment, Instant Rollback; new pushes then stay off your domain until you undo the rollback). The branch keeps the new commit: fix forward, or revert and /launchcodes again.
 
 Then ask with **AskUserQuestion**, this question alone in the call: header `<code>`, question
@@ -112,7 +132,7 @@ that question in bold. `dry-run`: no question; step 7.
 - "Later", "tonight", no, anything unclear: not a yes. Step 7.
 
 ## 5 · Launch: the only production step
-Give this Bash call the description `Ship <code> · PUSH to <branch> (production)`:
+Give this Bash call the description `Ship <code> · <name> · PUSH to <branch> (production)`:
 ```
 bash "${CLAUDE_SKILL_DIR}/scripts/push.sh" "<WT>" --owner-said-yes=<code>
 ```
@@ -145,4 +165,4 @@ The heading is the line from step 5 or 6, or **Ship <code> · <name>: not launch
 unchanged.** (only when nothing was pushed). Then one plain line per commit that went live, and "If you had the site
 open, refresh once." Never suggest checking by creating, editing or deleting real records on the live site; suggest
 a look-only check or the owner's own test record. End with _Record: Ship <code> · <branch> <old id> to <new id> ·
-launchcodes 0.1.0_ and "This /launchcodes is finished."
+launchcodes 0.2.0_ and "This /launchcodes is finished."
