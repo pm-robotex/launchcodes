@@ -7,7 +7,7 @@
 # It also warns when the build could change things outside its folder, because the build runs before your yes.
 # Exit: 0 ready | 1 nothing to ship / not a fast-forward | 3 setup problem (nothing was created)
 set -u
-VERSION=0.2.1
+VERSION=0.2.2
 S="$(cd "$(dirname "$0")" && pwd)"
 die() { echo "$1"; exit "${2:-3}"; }
 abspath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$(cd "$1" && pwd)"; else (cd "$1" && pwd); fi; }
@@ -131,7 +131,12 @@ CD="$(cd "$R" && cd "$(git rev-parse --git-common-dir)" && pwd)" && CD="$(abspat
 L="$CD/launchcodes"; LOG="$L/ships.log"
 mkdir -p "$L/codes" || die "SETUP: can't write $L"
 lg="$(node "$S/ledger.mjs" "$LOG")"; [ -n "$lg" ] && { echo; echo "$lg"; }
-left="$(g worktree list --porcelain | sed -n 's#^worktree \(.*/launch-[^/]*\)$#\1#p' | while IFS= read -r w; do [ -f "$w/.launch-state" ] && echo "   $w"; done)"
+left="$(g worktree list --porcelain | sed -n 's#^worktree \(.*/launch-[^/]*\)$#\1#p' | while IFS= read -r w; do
+  [ -f "$w/.launch-state" ] || continue
+  c="$(sed -n 's/^CODE=//p' "$w/.launch-state" | head -1)"; t="$(sed -n 's/^T=//p' "$w/.launch-state" | head -1)"
+  same=""; [ "$t" = "$T" ] && ! grep -q '^PUSHED=' "$w/.launch-state" && same="   <- THE SAME COMMIT as this release: another chat may be launching it now"
+  echo "   $w  ($c)$same"
+done)"
 [ -n "$left" ] && { echo; echo "== Clean copies from earlier runs still on disk (remove one with cleanup.sh when you're sure no chat is using it):"; echo "$left"; }
 
 day="$(date +%Y-%m-%d)"; dd="$(LC_ALL=C date +%d%b)"; CODE=""

@@ -144,6 +144,16 @@ while :; do
       led UNCONFIRMED "no deployment reported"; exit 4
     fi
   fi
-  [ $el -ge "$TIMEOUT" ] && { echo "TIMEOUT after ${el}s: your host hasn't finished yet. Check its dashboard."; led UNCONFIRMED timeout; exit 2; }
+  if [ $el -ge "$TIMEOUT" ]; then
+    # Vercel records the deployment only when it's done, but marks the commit "pending" while it builds: a slow build
+    # (queued behind others, or just long) looks like nothing happening. Its own status tells the two apart.
+    IFS=$'\t' read -r pst pdesc <<<"$(gh api "repos/$REPO/commits/$SHA/statuses" --jq '.[0] // empty | [.state, (.description // "")] | @tsv' 2>/dev/null)"
+    if [ "${pst:-}" = pending ]; then
+      echo "TIMEOUT after ${el}s, STILL BUILDING: your host is still deploying ${SHA:0:7} (it says: ${pdesc:-pending})."
+      echo "Builds sometimes queue or run long: run the live check once more."
+      led UNCONFIRMED "timeout, still building"; exit 2
+    fi
+    echo "TIMEOUT after ${el}s: your host hasn't finished yet. Check its dashboard."; led UNCONFIRMED timeout; exit 2
+  fi
   echo "  ...waiting for the production build (${el}s)"; sleep "$POLL"
 done

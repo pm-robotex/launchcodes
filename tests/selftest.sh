@@ -47,7 +47,11 @@ case "$2" in
       pending)  printf '2026-10-14T10:00:00Z\tpending\t-\t-\n' ;;
     esac ;;
   */statuses)   # a commit's statuses: counted (length), or read for the reason a deployment failed
-    case "$*" in *length*) echo 0 ;; *) [ "$mode" = failure ] && printf 'Git author test must have access to the project on Vercel to create deployments.\thttps://vercel.com/test/help\n' ;; esac ;;
+    case "$*" in
+      *length*) echo 0 ;;
+      *'"failure"'*) [ "$mode" = failure ] && printf 'Git author test must have access to the project on Vercel to create deployments.\thttps://vercel.com/test/help\n' ;;
+      *) [ "$mode" = pending ] && printf 'pending\tVercel is deploying your app\n' ;;   # the newest status, while it builds
+    esac ;;
 esac
 EOF
 # Stand-in for curl, as etag.sh calls it: the home page of the domain or of a deployment, with a canned status, ETag
@@ -356,7 +360,7 @@ export STUB_ASSET_BODY='const BUILD="0000000";'
 expect "another commit id in the script is not proof" 0 "DEPLOYED" bash "$S/wait_live.sh" "$WT" 30
 unset STUB_DEPLOY_STATUS STUB_DOMAIN_BODY STUB_ASSET_BODY
 export GH_STUB=inactive; expect "a deployment replaced by a newer one is NOT_CONFIRMED" 5 "replaced" bash "$S/wait_live.sh" "$WT" 30
-export GH_STUB=pending; expect "a build that never finishes times out" 2 TIMEOUT env POLL=1 bash "$S/wait_live.sh" "$WT" 2
+export GH_STUB=pending; expect "a build still running at the time limit says STILL BUILDING, to check again" 2 "STILL BUILDING" env POLL=1 bash "$S/wait_live.sh" "$WT" 2
 export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP
 bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
 Q="$(new_app refused)"; commit "$Q" q.txt q "a change the server refuses"
@@ -379,6 +383,13 @@ out="$(bash "$S/candidates.sh" "$K" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && grep -q "RELEASES READY: 2" <<<"$out" && grep -qE "^  [12]  feat-b " <<<"$out" && grep -qE "^  [12]  feat-c " <<<"$out" \
   && grep -qE "^PICK [12] = $(git -C "$K" rev-parse feat-c)$" <<<"$out" && grep -q "NOT LISTED: 2 other" <<<"$out" \
   && ok "a bare /launchcodes lists only the releases that sit on top of what's live, numbered, with their commit ids" || bad "the release list" "exit $rc: $out"
+prep "$K" "$(git -C "$K" rev-parse feat-c)"; KW="$WT"; KC="$CODE"
+out="$(bash "$S/candidates.sh" "$K" 2>&1)"
+grep "feat-c" <<<"$out" | grep -q "ALREADY BEING LAUNCHED as $KC" && ! grep "feat-b" <<<"$out" | grep -q "ALREADY BEING" \
+  && ok "a release with an open launchcodes copy is marked in the list" || bad "an in-flight release is marked" "$out"
+prep "$K" "$(git -C "$K" rev-parse feat-c)"
+grep -q "($KC)   <- THE SAME COMMIT" <<<"$OUT" && ok "and preparing the same commit again warns about the open copy" || bad "the same commit is flagged" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1; bash "$S/cleanup.sh" "$KW" >/dev/null 2>&1
 git -C "$K" fetch -q origin; git -C "$K" reset -q --hard origin/main
 
 W2="$(new_app carries)"; mkdir -p "$W2/supabase/migrations"

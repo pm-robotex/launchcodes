@@ -11,7 +11,7 @@ Then it waits for your host's production build and, if you tell it your domain, 
 
 Distilled from the release process behind 23+ real production releases of a React + Supabase ERP.
 
-> **v0.2.1, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
+> **v0.2.2, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
 > than ten real releases live on two Vercel sites. Other hosts are untested: if you use one, please tell us how it
 > went. Read the scripts before you trust them with production: they're short, and each one says what it does at the top.
 

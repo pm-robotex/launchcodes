@@ -2,6 +2,15 @@
 
 Safety fixes are marked **safety**. Update with `git -C ~/.claude/skills/launchcodes pull`.
 
+## 0.2.2 (October 2026)
+
+From five more real releases:
+- A slow host build no longer looks like a failure. When the live check runs out of time but your host still says
+  it's deploying (one Vercel build took 11 minutes instead of 2), it says STILL BUILDING, and Claude runs the
+  check once more before reporting.
+- The release list marks a release that already has an open launchcodes copy (another chat may be launching it),
+  and preparing the same commit again says so too.
+
 ## 0.2.1 (October 2026)
 
 - First-run setup: in a project without `.claude/launchcodes.json`, the first `/launchcodes` offers to create it

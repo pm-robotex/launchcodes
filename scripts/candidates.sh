@@ -20,6 +20,15 @@ rel_only() {   # same rule as prepare.sh: beyond $1, $PROD holds release commits
   [ "$(g rev-parse "$BASE^{tree}")" = "$(g rev-parse "$mb^{tree}")" ] || return 1
   ! g log --first-parent --format='%p%x09%s' "$mb..$BASE" | grep -vE '^[0-9a-f]+ [0-9a-f]+	Ship [0-9]{2}[A-Za-z]{3}-[0-9]+ ' | grep -q .
 }
+# Releases already being launched: an open clean copy (not pushed yet) holding that commit, from another chat or
+# from an earlier run that wasn't cleaned up. "<commit>:<code>" pairs.
+inflight=" "
+while IFS= read -r w; do
+  [ -n "$w" ] && [ -f "$w/.launch-state" ] && ! grep -q '^PUSHED=' "$w/.launch-state" || continue
+  inflight="$inflight$(sed -n 's/^T=//p' "$w/.launch-state" | head -1):$(sed -n 's/^CODE=//p' "$w/.launch-state" | head -1) "
+done <<EOF
+$(g worktree list --porcelain | sed -n 's#^worktree \(.*/launch-[^/]*\)$#\1#p')
+EOF
 n=0; behind=0; seen=" "
 while IFS=$'\t' read -r sha ref when subj; do
   name="${ref#refs/heads/}"; name="${name#refs/remotes/}"
@@ -35,6 +44,9 @@ while IFS=$'\t' read -r sha ref when subj; do
     m="$(printf '%s\n' "$files" | grep -cE '(^|/)(supabase/migrations|prisma/migrations|migrations|db/migrate)/')"
     e="$(printf '%s\n' "$files" | sed -nE 's#^(.*/)?supabase/functions/([^/]+)/.*#\2#p' | sort -u | grep -c .)"
     extra=""; [ "$m" -gt 0 ] && extra=" · $m database file(s)"; [ "$e" -gt 0 ] && extra="$extra · $e edge function(s)"
+    case "$inflight" in
+      *" $sha:"*) ic="${inflight#* $sha:}"; extra="$extra · ALREADY BEING LAUNCHED as ${ic%% *} (another chat, or a run not cleaned up)" ;;
+    esac
     [ "$c" = 1 ] && cw=commit || cw=commits
     printf '  %d  %s  %s  %s %s · %s%s\n      newest: %s\n' "$n" "$name" "${sha:0:7}" "$c" "$cw" "$when" "$extra" "$(printf '%s' "$subj" | cut -c1-90)"
     echo "PICK $n = $sha"

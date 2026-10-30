@@ -14,7 +14,7 @@ allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/cleanup.sh" *)'
 ---
 
-# /launchcodes 0.2.1: committed work to production, after your yes
+# /launchcodes 0.2.2: committed work to production, after your yes
 
 Arguments: `$ARGUMENTS`
 - **empty**: step 0, list the releases that are ready; the owner picks one.
@@ -59,14 +59,16 @@ bash "${CLAUDE_SKILL_DIR}/scripts/candidates.sh" "<repo root>"
 use AskUserQuestion, one option per release (label `<n> · <branch>`, its line as the description); with one, the
 options **Prepare <branch>** and **Stop**; with more, end the turn asking for the number. You may say which one
 this conversation was about, but the owner chooses. The answer is a choice, not approval: step 1 with that
-release's full commit id from its `PICK` line. `NOTHING_READY` or exit 3: explain in plain words and stop.
+release's full commit id from its `PICK` line. `NOTHING_READY` or exit 3: explain in plain words and stop. A
+release marked `ALREADY BEING LAUNCHED`: say so in the question; another chat may be launching it right now.
 
 ## 1 · Prepare
 ```
 bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" "<repo root>" [commit] [--dry-run]
 ```
 Exit 0: keep `WT=` and `LAUNCH CODE:`. Tell the owner about anything under "NOT part of this release", "NEWER",
-"Not cleaned up yet" or "Clean copies from earlier runs". Exit 1 (`NOTHING_TO_SHIP`, `NOT_FAST_FORWARD`) or 3 (a
+"Not cleaned up yet" or "Clean copies from earlier runs"; a copy marked `THE SAME COMMIT` means another chat may be
+launching this release now: ask the owner before step 2. Exit 1 (`NOTHING_TO_SHIP`, `NOT_FAST_FORWARD`) or 3 (a
 setup problem; nothing was created): explain it in plain words and stop.
 - **"BUILD MAY CHANGE THINGS"** or **"MIGRATION FILES"** printed: the build runs before the yes. Ask the owner
   before step 2: do those scripts reach a real database or service with the settings the build gets, is each
@@ -159,6 +161,7 @@ It can take up to 9 minutes. Don't run it in the background: its result would ar
 cleanup is no longer pre-approved. When it returns, post one line:
 - `LIVE`: **Ship <code> · <name>: Live ✅ <domain> serves it (<time>).**
 - `DEPLOYED`: **Ship <code> · <name>: Published ✅ <host> finished building it (<time>); <the reason it gives why the domain wasn't confirmed>.**
+- `TIMEOUT` with `STILL BUILDING`: your host is still at it. Run the same command once more, then report.
 - anything else: **Ship <code> · <name>: pushed, not confirmed live: <reason in plain words>.** <branch> now has
   it; give the next step from the script's message. Never write "unchanged" after a push.
 
@@ -174,4 +177,4 @@ The heading is the line from step 5 or 6, or **Ship <code> · <name>: not launch
 unchanged.** (only when nothing was pushed). Then one plain line per commit that went live, and "If you had the site
 open, refresh once." Never suggest checking by creating, editing or deleting real records on the live site; suggest
 a look-only check or the owner's own test record. End with _Record: Ship <code> · <branch> <old id> to <new id> ·
-launchcodes 0.2.1_ and "This /launchcodes is finished."
+launchcodes 0.2.2_ and "This /launchcodes is finished."
