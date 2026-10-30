@@ -11,7 +11,7 @@ Then it waits for your host's production build and, if you tell it your domain, 
 
 Distilled from the release process behind 23+ real production releases of a React + Supabase ERP.
 
-> **v0.2.0, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
+> **v0.2.1, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
 > than ten real releases live on two Vercel sites. Other hosts are untested: if you use one, please tell us how it
 > went. Read the scripts before you trust them with production: they're short, and each one says what it does at the top.
 
@@ -151,6 +151,11 @@ Put a `.claude/launchcodes.json` in your project and commit it (it holds no secr
 same settings. Every key is optional; `examples/launchcodes.json` shows the shape. Its domain and project values are
 refused on purpose: put your own, and delete every key you don't need.
 
+You don't have to write it by hand. The first `/launchcodes` in a project without one offers to create it: give
+Claude your live domain and, if you use Supabase, your **production** project id (the part before `.supabase.co`),
+or say "not now". Claude never guesses them. The file is written only from your answers and never overwrites one
+you already have.
+
 | key | default | meaning |
 |---|---|---|
 | `prodBranch` | origin's default branch | the branch your host deploys to production |
@@ -222,6 +227,7 @@ and why.
 | script | what it does |
 |---|---|
 | `candidates.sh` | with no commit given: lists the releases that are ready, numbered, for you to pick |
+| `setup.sh` | first run only: writes `.claude/launchcodes.json` from your answers (domain, production Supabase project) |
 | `prepare.sh` | checks your tools, works out the commits, warns about uncommitted files, risky build scripts, migration files, edge functions and earlier commits your host never put live, gives the launch code, makes the clean copy |
 | `build.sh` | installs from your lockfile and builds; records the built tree only if both pass |
 | `check.sh` | runs `never_ships.mjs`, `secret_scan.mjs`, `scope_lint.mjs` and, for Supabase, `db_refs.mjs` + `refcheck_sql.mjs` |

@@ -441,6 +441,24 @@ grep -q '"n":"gift_wrap"' <<<"$refs" && grep -q '"n":"name"' <<<"$refs" && grep 
 grep -q "DYNAMIC.*orders.upsert" <<<"$out" && ok "a row it can't trace is listed for a person to read" || bad "an untraceable row is listed" "$out"
 done_with "$J"
 
+# --- first run: the settings file from the owner's answers -----------------------------------------------------
+commit "$J" first.txt f "a change in a project without settings"; rm "$J/.claude/launchcodes.json"
+prep "$J"; grep -q "== FIRST RUN" <<<"$OUT" && grep -q "PRODUCTION Supabase project" <<<"$OUT" && ok "a first run offers the settings that complete the checks, Supabase included" || bad "a first run offers the settings" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1; git -C "$J" checkout -q -- .claude/launchcodes.json
+prep "$J"; ! grep -q "FIRST RUN" <<<"$OUT" && ok "and says nothing once the file exists" || bad "no first-run offer once the file exists" "$OUT"
+done_with "$J"
+SJ="$(new_app setup)"
+expect "setup never overwrites an existing settings file" 1 "already exists" bash "$S/setup.sh" "$SJ" --domain www.launchcodes-test.dev
+rm "$SJ/.claude/launchcodes.json"
+expect "setup refuses something that isn't a domain" 1 REFUSED bash "$S/setup.sh" "$SJ" --domain 'not a domain'
+expect "setup refuses a Supabase id of the wrong shape" 1 REFUSED bash "$S/setup.sh" "$SJ" --domain none --supabase abc
+expect "setup refuses the README's example domain" 1 "example value" bash "$S/setup.sh" "$SJ" --domain www.example.com
+[ ! -e "$SJ/.claude/launchcodes.json" ] && ok "and keeps nothing after a refusal" || bad "nothing kept after a refusal" "$(cat "$SJ/.claude/launchcodes.json")"
+expect "setup writes the file from the owner's answers" 0 WROTE bash "$S/setup.sh" "$SJ" --domain https://www.launchcodes-test.dev/ --supabase abcdefghijklmnopqrst
+got="$(node "$S/cfg.mjs" "$SJ" domain "")|$(node "$S/cfg.mjs" "$SJ" supabaseProjectRef "")|$(node "$S/cfg.mjs" "$SJ" prodBranch "")"
+[ "$got" = "https://www.launchcodes-test.dev|abcdefghijklmnopqrst|main" ] && ok "with the production branch, domain and project it was given" || bad "setup's values" "$got"
+git -C "$SJ" checkout -q -- .claude/launchcodes.json
+
 # --- optional: the code check end to end (needs the network to install ESLint) ---------------------------------
 if [ "${LAUNCHCODES_FULL:-0}" = 1 ]; then
   L="$(new_app lint)"

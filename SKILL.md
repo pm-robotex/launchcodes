@@ -6,6 +6,7 @@ argument-hint: "[commit | list number] [dry-run]"
 allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/candidates.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" *)'
+  - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/setup.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/build.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/check.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/plan.sh" *)'
@@ -13,7 +14,7 @@ allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/cleanup.sh" *)'
 ---
 
-# /launchcodes 0.2.0: committed work to production, after your yes
+# /launchcodes 0.2.1: committed work to production, after your yes
 
 Arguments: `$ARGUMENTS`
 - **empty**: step 0, list the releases that are ready; the owner picks one.
@@ -42,6 +43,7 @@ clean-copy path it prints.
 4. **Never write to the production database**: not to make a check pass, not when asked mid-release. The owner
    applies migrations; you only run the one read-only query that check.sh prints. **Never edit
    `.claude/launchcodes.json` and never add `launchcodes:allow` to a file yourself**: those are the owner's calls.
+   The one exception: on a first run, setup.sh creates the file from the values the owner gave you (step 1).
 5. Give long steps `timeout: 600000`. Anything you can't explain: stop and tell the owner what you saw.
    Production is untouched until step 5.
 6. Compacted mid-release: Read `${CLAUDE_SKILL_DIR}/SKILL.md` again, then run
@@ -75,6 +77,13 @@ setup problem; nothing was created): explain it in plain words and stop.
   the new site needs them, after it if the old site would break). Not sure: step 7.
 - **"ALSO GOING LIVE"** printed: commits already on the production branch that the host never put live go out with
   this release. Name them in the plan.
+- **"FIRST RUN"** printed: in the same message as any question above, offer once to create the settings file: ask
+  for the live domain and, if the Supabase line is printed, the PRODUCTION Supabase project id (the part before
+  `.supabase.co` in its URL), each answerable with "none", or "not now" to skip. Never guess, look up or fill in
+  these values yourself. When the owner gives them, run
+  `bash "${CLAUDE_SKILL_DIR}/scripts/setup.sh" "<repo root>" --domain <domain|none> --supabase <id|none>` and show
+  what it wrote. `REFUSED`: say why in plain words and ask once more, or carry on without it. "Not now": carry on;
+  nothing is written.
 - The owner wants something committed first: run step 7 for this `<WT>`, let them commit it (or add only the files
   they name, `git add -- <file>`, never `-A` or `.`), then start again at step 1.
 
@@ -165,4 +174,4 @@ The heading is the line from step 5 or 6, or **Ship <code> · <name>: not launch
 unchanged.** (only when nothing was pushed). Then one plain line per commit that went live, and "If you had the site
 open, refresh once." Never suggest checking by creating, editing or deleting real records on the live site; suggest
 a look-only check or the owner's own test record. End with _Record: Ship <code> · <branch> <old id> to <new id> ·
-launchcodes 0.2.0_ and "This /launchcodes is finished."
+launchcodes 0.2.1_ and "This /launchcodes is finished."

@@ -2,6 +2,13 @@
 
 Safety fixes are marked **safety**. Update with `git -C ~/.claude/skills/launchcodes pull`.
 
+## 0.2.1 (October 2026)
+
+- First-run setup: in a project without `.claude/launchcodes.json`, the first `/launchcodes` offers to create it
+  from your answers (your live domain and, for Supabase, your production project id). Claude never guesses them;
+  the file is checked before and after it is written and never overwrites an existing one. Without it, every
+  release asked which Supabase project is production, and a release could only end as "Published", not "Live".
+
 ## 0.2.0 (October 2026)
 
 From the first ten real releases with launchcodes.

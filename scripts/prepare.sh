@@ -7,7 +7,7 @@
 # It also warns when the build could change things outside its folder, because the build runs before your yes.
 # Exit: 0 ready | 1 nothing to ship / not a fast-forward | 3 setup problem (nothing was created)
 set -u
-VERSION=0.2.0
+VERSION=0.2.1
 S="$(cd "$(dirname "$0")" && pwd)"
 die() { echo "$1"; exit "${2:-3}"; }
 abspath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$(cd "$1" && pwd)"; else (cd "$1" && pwd); fi; }
@@ -117,6 +117,13 @@ fns="$(g -c core.quotePath=false diff --name-only --no-renames "$BASE" "$T" | se
 if [ -n "$fns" ]; then
   echo; echo "== EDGE FUNCTIONS changed in this release: pushing does NOT deploy them (they run on Supabase, not your host):"
   for f in $fns; do if [ "$f" = _shared ]; then echo "   _shared (code every function that imports it uses)"; else echo "   $f"; fi; done
+fi
+# First run: no settings file. The two settings that complete the checks can't be guessed safely, so they are asked.
+if [ ! -f "$R/.claude/launchcodes.json" ]; then
+  echo; echo "== FIRST RUN: no .claude/launchcodes.json yet. Claude can create it from your answers (setup.sh), so that:"
+  echo "   - the live check confirms your domain serves each release (\"domain\")"
+  g grep -q '"@supabase/supabase-js"' "$T" -- '*package.json' 2>/dev/null \
+    && echo "   - the database check knows your PRODUCTION Supabase project without asking each time (\"supabaseProjectRef\")"
 fi
 
 # 4 · the launch ledger (inside .git: never committed, never pushed), other releases, leftovers
