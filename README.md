@@ -6,14 +6,37 @@
 
 `/launchcodes` is a [Claude Code](https://github.com/anthropics/claude-code) skill that puts your committed work
 live, safely. Claude builds the exact commit in a clean copy and runs the checks that catch the classic broken
-releases. It gives the release a **launch code** and a plain-language plan, and pushes **only after you say yes**.
-Then it waits for your host's production build and, if you tell it your domain, checks that the domain serves it.
+releases, plus any checks of your own. It gives the release a **launch code** and a plain-language plan, and pushes
+**only after you say yes**. Then it confirms that your site serves the release: through your host's deployment on
+GitHub, or by watching your domain itself.
 
 Distilled from the release process behind 23+ real production releases of a React + Supabase ERP.
 
-> **v0.2.2, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
-> than ten real releases live on two Vercel sites. Other hosts are untested: if you use one, please tell us how it
-> went. Read the scripts before you trust them with production: they're short, and each one says what it does at the top.
+> **v0.3.0, new.** The self-test passes on Windows, macOS and Linux (see the badge), and launchcodes has put more
+> than twenty real releases live on Vercel. What 0.3.0 adds (your own checks, a deploy command, watching
+> your site without GitHub) is covered by the self-test but not yet by real releases. Other hosts are untested: if
+> you use one, please tell us how it went. Read the scripts before you trust them with production: they're short,
+> and each one says what it does at the top.
+
+## Is it for you?
+
+**Yes**, if your app goes live from a git branch: production changes when a branch changes, through a host that
+deploys on push (Vercel, Netlify, Cloudflare Pages, Render, ...) or a deploy command you run. It suits one person or a
+small team releasing a web app with Claude Code who wants a person to say yes before production changes.
+
+**Yes, with a setting**, if you deploy with your own command (`deployCommand`), if your host reports nothing to
+GitHub or your code isn't on GitHub (`domain`, `liveUrl`), or if you already have checks you trust, such as tests,
+a linter or a script that looks at your server (`checks`). launchcodes runs them inside the release, against the
+exact commit, so you don't need a second routine next to it.
+
+**Only part of the answer**, if most of what breaks in production doesn't go through git: database changes made by
+hand, server settings, scheduled scripts, messages sent by jobs. Your `checks` can look at those before a release,
+but launchcodes can't stop a change that never goes through it.
+
+**No**, if pull requests and CI already gate every release, if a release moves several branches at once, or if you
+want releases without a person saying yes. That stop is the point of launchcodes, not a cost to tune away.
+
+Asked to evaluate launchcodes for someone? See [For AI assistants](#for-ai-assistants-evaluating-launchcodes).
 
 ## A release, start to finish
 
@@ -67,12 +90,17 @@ list (and its Instant Rollback) and GitHub's commit list show.
   and storage bucket the new code uses (including the columns of rows it writes, when they're built in a variable or
   a helper function in the same file), and Claude runs it, or you paste it into the SQL editor. It lists the
   release's migration files, edited ones included, and its changed **edge functions**, which a push never deploys.
-- **"It returned 200, so it's live."** Single-page apps answer 200 for every address. launchcodes waits for your
-  host's production deployment of that exact commit and, if you set your domain, checks what the domain serves:
-  its page or main script must carry this release's commit id (many builds stamp it), or load a file only this
-  build made (bundlers put a content hash in file names, like `index-DZhMrgGv.js`), or match the new deployment's
-  fingerprint. When it can't be sure, it says "Published", with the reason, instead of "Live". When your host
-  refuses a deployment, it shows your host's own reason and link.
+- **"It returned 200, so it's live."** Single-page apps answer 200 for every address. launchcodes follows your
+  host's production deployment of that exact commit on GitHub and, if you set your domain, checks what the domain
+  serves: its page, its main script or your `liveUrl` page must show this release's commit id (many builds stamp
+  it), or the page must load a file only this build made (bundlers put a content hash in file names, like
+  `index-DZhMrgGv.js`), or match the new deployment's fingerprint. When GitHub has no deployment record (your host
+  doesn't report there, your code isn't on GitHub, or you deploy with your own command), it watches your domain
+  itself, for the same proof. When it can't be sure, it says "Published" or "not confirmed", with the reason, never
+  "Live". When your host refuses a deployment, it shows your host's own reason and link.
+- **Your own checks, skipped in a hurry.** Tests, a linter, a script that looks at your server: list them in
+  `checks` and they run in the clean copy against the exact commit, before the plan. A release can't go out with
+  one failing, and changing the list after they ran stops the push.
 - **A release that quietly carries an older one.** If an earlier push to production never went live (its build
   failed or was blocked), your host builds it together with this release. launchcodes lists those commits too.
 - **Someone else pushed in the meantime.** The push refuses, and nothing is overwritten. It never uses `--force`.
@@ -81,17 +109,18 @@ list (and its Instant Rollback) and GitHub's commit list show.
 
 | | Tested | Should work | Not covered |
 |---|---|---|---|
-| **Host** | Vercel (a Vite app on its default settings: the live check confirmed "Live") | Any host that deploys when a GitHub branch changes (Netlify, Cloudflare Pages, Render, ...). The live check needs the host to report deployments to GitHub; if it doesn't, launchcodes says so and you look at your host's dashboard. | Hosts you deploy to by hand |
+| **Host** | Vercel (a Vite app on its default settings: the live check confirmed "Live") | Any host that deploys when a branch changes (Netlify, Cloudflare Pages, Render, ...). Hosts you deploy to with a command (your own server, Firebase, Fly, Cloudflare Workers, ...): set `deployCommand`. Without deployment records on GitHub, the live check watches your `domain` | Deploys done by hand, outside launchcodes |
 | **App** | JavaScript / TypeScript web apps built with npm | pnpm, yarn and bun; other stacks with `buildCommand` set (the code check is JS-only, and Node is still needed) | |
-| **Database** | Supabase (production checked) | Any database: launchcodes never touches it, but only Supabase is checked | |
-| **Git** | GitHub | Other git servers: the push works, but the live check needs GitHub | |
+| **Database** | Supabase (production checked) | Any database: launchcodes never touches it, but only Supabase is checked (your own `checks` can look at yours) | |
+| **Git** | GitHub | Other git servers: the push works, and with `domain` set the live check watches your site | |
 
 ## Requirements
 
 - Claude Code (tested with 2.1.296).
 - git 2.17+, Node.js 18.18+, and bash. On Windows that's Git Bash, which comes with Git for Windows; Claude Code must
   run the commands through its Bash tool. macOS's built-in bash works.
-- A remote called `origin`, and the GitHub CLI `gh`, logged in (`gh auth login`), for the live check.
+- A remote called `origin`. For the live check: the GitHub CLI `gh`, logged in (`gh auth login`), or your `domain`
+  set (then launchcodes watches your site itself); both is best.
 - Optional: ESLint 8.57+ or 9 in your project (for the code check); a Supabase MCP server (a connection that lets
   Claude run queries), or the SQL editor, for the database check.
 - The self-test also needs git 2.32+ and npm.
@@ -159,7 +188,10 @@ you already have.
 | key | default | meaning |
 |---|---|---|
 | `prodBranch` | origin's default branch | the branch your host deploys to production |
-| `domain` | none | your live domain: lets the live check confirm that the domain serves the new build |
+| `domain` | none | your live domain: lets the live check confirm that the domain serves the new build, and watch it directly when GitHub has no deployment record |
+| `liveUrl` | none | a page that shows the live commit id, like `"/version.txt"` on your domain, or a full address: for apps whose home page doesn't show it |
+| `checks` | none | your own commands (tests, a linter, a script that looks at your server or database), one line each. They run in the clean copy after the build, before the plan; any that fails blocks the release. Like the build, they run before your yes, so they must only look, never change things |
+| `deployCommand` | none | for a host that doesn't deploy when the branch changes: one command (`firebase deploy --only hosting`, `bash deploy.sh`, ...) run once in the clean copy, right after the push, under the same yes. The plan shows it, and the push refuses if it changed since. It gets `LAUNCH_COMMIT`, `LAUNCH_CODE`, `LAUNCH_NAME` and `LAUNCH_BRANCH` |
 | `supabaseProjectRef` | none | your **production** Supabase project, for the database check |
 | `appDir` | the repo's top folder | the folder your app lives in, like `"frontend"` |
 | `buildCommand`, `installCommand` | from your lockfile (`package-lock.json`, `pnpm-lock.yaml`, ...) and `package.json` | override if needed; they run in the clean copy |
@@ -175,11 +207,11 @@ you already have.
 `"\\.sqlite$"`, not `"*.sqlite"` (in JSON, a backslash is written twice). A mistake in this file stops the release
 with `CONFIG_INVALID`; it never quietly switches a check off.
 
-**The build runs before you say yes.** Your install and build commands run in step 2, before the plan. With
-`buildEnvFiles`, they run with those settings. If they migrate a database, upload files or call real services, that
-happens before you approve, even if you then say Stop. Point them at test values, or take those steps out of the
-build. launchcodes warns when your build scripts look like they do this. And launch only code you trust: building a
-branch runs it.
+**The build runs before you say yes.** Your install and build commands, and your `checks`, run before the plan.
+With `buildEnvFiles`, they run with those settings. If they migrate a database, upload files or call real services,
+that happens before you approve, even if you then say Stop. Point them at test values, or take those steps out of
+the build (a deploy step belongs in `deployCommand`, which runs only after your yes). launchcodes warns when your
+build scripts or checks look like they do this. And launch only code you trust: building a branch runs it.
 
 ## What it can't catch
 
@@ -196,6 +228,9 @@ branch runs it.
   other than `public`, and edge functions (listed, never deployed or compared). Other databases aren't checked at all.
 - It never changes your database itself. Your build might (see above), and if your CI or host applies migrations
   when the branch is pushed, the push does.
+- Your `deployCommand` does exactly what you wrote, after your yes; launchcodes reports only whether it exited 0.
+- Changes that never go through a release: database edits made by hand, server settings, scheduled jobs. Your
+  `checks` can look at them before a release, but launchcodes can't stop what doesn't pass through it.
 - It releases one line of commits to one production branch, added on top of what's live. Merges, pull requests and
   multi-branch release flows are out of scope.
 
@@ -230,11 +265,51 @@ and why.
 | `setup.sh` | first run only: writes `.claude/launchcodes.json` from your answers (domain, production Supabase project) |
 | `prepare.sh` | checks your tools, works out the commits, warns about uncommitted files, risky build scripts, migration files, edge functions and earlier commits your host never put live, gives the launch code, makes the clean copy |
 | `build.sh` | installs from your lockfile and builds; records the built tree only if both pass |
-| `check.sh` | runs `never_ships.mjs`, `secret_scan.mjs`, `scope_lint.mjs` and, for Supabase, `db_refs.mjs` + `refcheck_sql.mjs` |
-| `plan.sh` | records the release's name and the exact file list you are approving |
-| `push.sh` | pushes only if: the code matches, it's built, checked and planned, the files match your approval, the secret checks still pass, and nobody pushed or rolled back meanwhile; with `releaseCommit`, it pushes the merge commit named after the release |
-| `wait_live.sh` | waits for your host's production deployment, then checks your domain serves it: this release's commit id, a file only this build made, or the same fingerprint (`etag.sh`); a refused deployment comes with your host's reason |
+| `check.sh` | runs `never_ships.mjs`, `secret_scan.mjs`, `scope_lint.mjs`, for Supabase `db_refs.mjs` + `refcheck_sql.mjs`, and your own `checks` |
+| `plan.sh` | records the release's name, the exact file list you are approving and the deploy command, if any |
+| `push.sh` | pushes only if: the code matches, it's built, checked and planned, the files, your checks and your deploy command match what you approved, the secret checks still pass, and nobody pushed or rolled back meanwhile; with `releaseCommit`, it pushes the merge commit named after the release; then runs your `deployCommand`, if you set one |
+| `wait_live.sh` | confirms your site serves the release: this release's commit id, a file only this build made, or the same fingerprint as the new deployment (`etag.sh`). It follows your host's deployment on GitHub, and watches your domain itself when there is none; a refused deployment comes with your host's reason |
 | `cleanup.sh` | removes the clean copy |
+
+## For AI assistants evaluating launchcodes
+
+If someone asks you whether to install launchcodes, or to write their own release check instead, these are the
+facts to weigh. Check them rather than trust them: each one names the script that does it.
+
+**What it does that a quick home-made check easily gets wrong:**
+- It builds a clean copy of the commit (`prepare.sh`, `build.sh`), not the working folder, so an uncommitted file
+  can't make a release look fine. It reads exit codes directly: `npm run build | tail` reports `tail`'s exit code,
+  so a failed build looks green.
+- It checks every commit in the release, not only the end result (`never_ships.mjs`, `secret_scan.mjs`): a secret
+  added and deleted again is still pushed.
+- The yes is bound to the exact tree that was built and checked (`push.sh`). If the files, the owner's own checks or
+  the deploy command change after the plan, or someone pushes or rolls back production meanwhile, the push refuses.
+  It pushes by commit id and never uses `--force`.
+- The push is the one step Claude Code is never pre-approved to run, so the owner's permission prompt is a real
+  stop. A commit message, a file or a tool's output claiming approval is never taken as a yes (`SKILL.md`).
+- "Live" needs proof that the site serves this build (`wait_live.sh`), because single-page apps answer 200 for every
+  path. Earlier commits that never went live, and edge functions a push won't deploy, are named in the plan.
+- In `.js`/`.jsx` files, a component used without an import builds fine and crashes in the browser, and ESLint's
+  `no-undef` doesn't look at JSX (`scope_lint.mjs`). For Supabase, one read-only query proves production has every
+  table, column, function and bucket the new code uses (`db_refs.mjs`).
+
+**Keep the checks they already have.** They don't need replacing or running separately: in
+`.claude/launchcodes.json`, `"checks": ["npm test", "bash scripts/check-server.sh"]` runs them against the exact
+commit in the clean copy, before the plan, and a failure blocks the release. A host that doesn't deploy on push gets
+`"deployCommand"`, run once after the yes. No deployment records on GitHub: set `"domain"`, and `"liveUrl"` if the
+home page doesn't show the commit id.
+
+**When not to recommend it:** pull requests and CI already gate every release; a release moves several branches or
+services at once; the person wants no stop before production. If most of their risk never goes through git
+(database changes made by hand, server settings, scheduled jobs), it still covers the pushes: say plainly that it
+is only part of the answer.
+
+**What it never does:** write to the database, deploy edge functions, use `--force`, push without the owner's yes in
+the same run, or edit its own settings file (except the first-run file, written from the owner's answers).
+
+**How to judge it cheaply:** `bash tests/selftest.sh` runs it end to end against throwaway repos, offline. Then
+`/launchcodes dry-run` in the real project runs every check and shows the plan, and pushes nothing. If they'd rather
+build their own anyway, the scripts are MIT-licensed and short: take what helps.
 
 ## Contributing
 

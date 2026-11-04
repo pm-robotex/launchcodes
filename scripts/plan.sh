@@ -22,7 +22,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 LINT_V="${LINT:-}"; LINT_W="${LINT_V%% *}"; LINT_T="${LINT_V##* }"
-checked=no; [ "${PATHS_OK:-}" = "$TREE" ] && [ "${SECRETS_OK:-}" = "$TREE" ] && [ "$LINT_T" = "$TREE" ] && checked=yes
+OWN_V="${OWN_CHECKS:-}"
+checked=no; [ "${PATHS_OK:-}" = "$TREE" ] && [ "${SECRETS_OK:-}" = "$TREE" ] && [ "$LINT_T" = "$TREE" ] && [ "${OWN_V##* }" = "$TREE" ] && checked=yes
 dry=""; [ "$DRY_RUN" = 1 ] && dry="   (DRY RUN: nothing will be pushed)"
 
 if [ $MODE = status ]; then
@@ -48,9 +49,11 @@ if ! printf '%s' "$NAME" | LC_ALL=C grep -qE '^[A-Za-z0-9][A-Za-z0-9 ,.:+/&()-]{
   echo "write 'do not', not 'don't'; and write code names plainly, like useAuth)"; exit 1
 fi
 
-grep -v -E '^(SHIP_NAME|DB_RESULT|PLANNED)=' "$WT/.launch-state" > "$WT/.launch-tmp" && mv "$WT/.launch-tmp" "$WT/.launch-state"
+# The deploy command the owner sees in this plan is the one push.sh may run: it refuses if the setting changes.
+dep="$(node "$S/cfg.mjs" "$R" deployCommand "")" || { echo "$dep"; exit 3; }
+grep -v -E '^(SHIP_NAME|DB_RESULT|PLANNED|DEPLOY_PLANNED)=' "$WT/.launch-state" > "$WT/.launch-tmp" && mv "$WT/.launch-tmp" "$WT/.launch-state"
 git -c core.quotePath=false -C "$R" diff --name-only --no-renames "$BASE" "$T" > "$WT/.launch-approved-files" || { echo "SETUP: git diff failed"; exit 3; }
-{ printf 'SHIP_NAME=%q\n' "$NAME"; printf 'DB_RESULT=%q\n' "$DBR"; printf 'PLANNED=%q\n' "$TREE"; } >> "$WT/.launch-state"
+{ printf 'SHIP_NAME=%q\n' "$NAME"; printf 'DB_RESULT=%q\n' "$DBR"; printf 'DEPLOY_PLANNED=%q\n' "$dep"; printf 'PLANNED=%q\n' "$TREE"; } >> "$WT/.launch-state"
 printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" PLANNED "$NAME" >> "$LOG" 2>/dev/null
 
 echo "PLAN FACTS: Ship $CODE · $NAME"
@@ -92,8 +95,10 @@ case "${BUILD_STATUS:-}" in passed) b="build ✓" ;; *) b="nothing to build" ;; 
 case "$LINT_W" in passed) l="code check ✓" ;; skipped) l="code check skipped (ESLint missing or too old)" ;; none) l="code check: no JS files changed" ;; *) l="code check switched off" ;; esac
 case "$DBR" in checked) d="database ✓" ;; not-checked) d="database NOT checked (the owner chose to skip it)" ;; *) d="database: nothing to check" ;; esac
 envs=""; [ "${BUILD_ENV:-0}" != 0 ] && envs=" · the build used $BUILD_ENV env file(s) from your folder"
-echo "  checks: $b · secret files ✓ · keys in code ✓ · $l · $d$envs"
+own=""; [ "${OWN_V%% *}" != 0 ] && [ -n "${OWN_V%% *}" ] && own=" · your own checks ✓ (${OWN_V%% *})"
+echo "  checks: $b · secret files ✓ · keys in code ✓ · $l · $d$own$envs"
 echo "  the build ran: ${BUILD_CMDS:-?}"
+[ -n "$dep" ] && echo "  AFTER THE PUSH, under the same yes, it runs your deployCommand: $dep"
 echo "  live check: $LIVE_CHECK"
 echo "  approval: only the owner's yes to this plan, then  push.sh <WT> --owner-said-yes=$CODE"
 echo "READY_TO_ASK"

@@ -11,7 +11,7 @@ const KEYS = {
   prodBranch: 'string', domain: 'string', supabaseProjectRef: 'string', appDir: 'dir',
   buildCommand: 'string', installCommand: 'string', workDir: 'abs',
   buildEnvFiles: 'paths', neverShip: 'regexes', allowPaths: 'regexes', lintGlobals: 'names', codeCheck: 'boolean',
-  releaseCommit: 'boolean',
+  releaseCommit: 'boolean', checks: 'commands', deployCommand: 'string', liveUrl: 'url',
 };
 const EXAMPLE = { domain: /^(https?:\/\/)?(www\.)?example\.(com|org)\/?$/i, supabaseProjectRef: /^your-/i };
 const inside = (p) => !(p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:/.test(p) || p.split(/[\\/]/).includes('..'));
@@ -31,17 +31,24 @@ export function loadConfig(repo) {
     if (v === null) continue;
     const fail = (why) => { throw new ConfigError(`"${k}" ${why}`); };
     if (type === 'boolean') { if (typeof v !== 'boolean') fail('must be true or false'); continue; }
+    if (type === 'url') {
+      if (typeof v !== 'string' || !/^(https?:\/\/[^\s/]+[^\s]*|\/[^\s]*)$/.test(v)) fail('must be a full address (https://...) or a path on your domain starting with /');
+      if (v.startsWith('/') && !cfg.domain) fail('is a path, so "domain" must be set too');
+      continue;
+    }
     if (type === 'string' || type === 'dir' || type === 'abs') {
       if (typeof v !== 'string' || !v.trim()) fail('must be a non-empty text value');
       if (type === 'dir' && !inside(v)) fail('must be a folder inside your repo, like "frontend"');
       if (type === 'abs' && !(v.startsWith('/') || /^[A-Za-z]:[\\/]/.test(v))) fail('must be an absolute folder path');
       if (EXAMPLE[k] && EXAMPLE[k].test(v)) fail(`still has the example value "${v}" — put your own, or delete the key`);
+      if (k === 'deployCommand' && /[\r\n]/.test(v)) fail('must be one line, so the plan can show all of it (chain commands with &&, or call a script)');
       continue;
     }
     if (!Array.isArray(v)) fail('must be a list, like ["...", "..."]');
     v.forEach((x, i) => {
       const item = `item ${i + 1}`;
       if (typeof x !== 'string' || !x.trim()) fail(`${item} is empty or not text`);
+      if (type === 'commands' && /[\r\n]/.test(x)) fail(`${item} must be one line (chain commands with && if you need several)`);
       if (type === 'regexes') {
         try { new RegExp(x, 'i'); }
         catch (e) { fail(`${item} is not a valid regular expression (${e.message}). These are regular expressions, not .gitignore patterns: write "\\\\.sqlite$", not "*.sqlite".`); }

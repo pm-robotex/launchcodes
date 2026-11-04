@@ -62,6 +62,7 @@ out=/dev/null; prev=""
 for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; url="$a"; done
 case " $* " in *" --help "*) exit 0 ;; esac
 case "$url" in
+  */version.txt) st=200; tag=""; body="${STUB_VERSION_BODY:-}" ;;
   *deploy-*)  st="${STUB_DEPLOY_STATUS:-200}"; tag="${STUB_DEPLOY_ETAG:-}"; body="" ;;
   */assets/*) st=200; tag=""; body="${STUB_ASSET_BODY:-}" ;;
   *)          st="${STUB_DOMAIN_STATUS:-200}"; tag="${STUB_DOMAIN_ETAG:-}"; body="${STUB_DOMAIN_BODY:-}" ;;
@@ -256,6 +257,14 @@ cfgset "$D" ', "domain": "www.example.com"'
 expect "the example domain is refused" 3 "example value" bash "$S/prepare.sh" "$D"
 cfgset "$D" ', "prodBranh": "main"'
 expect "a misspelt key is refused" 3 "unknown key" bash "$S/prepare.sh" "$D"
+cfgset "$D" ', "liveUrl": "/version.txt"'
+expect "a liveUrl path without a domain is refused" 3 "is a path" bash "$S/prepare.sh" "$D"
+cfgset "$D" ', "liveUrl": "version.txt"'
+expect "a liveUrl that is neither an address nor a path is refused" 3 "full address" bash "$S/prepare.sh" "$D"
+cfgset "$D" ', "checks": ["npm test", ""]'
+expect "an empty check is refused" 3 "is empty" bash "$S/prepare.sh" "$D"
+cfgset "$D" ', "deployCommand": "echo a\nrm -rf dist"'
+expect "a deployCommand on two lines is refused, so the plan shows all of it" 3 "must be one line" bash "$S/prepare.sh" "$D"
 printf '\xef\xbb\xbf{ "workDir": "%s" }\n' "$(winpath "$WORK")" > "$D/.claude/launchcodes.json"
 prep "$D"; [ "$RC" -eq 0 ] && ok "a config file starting with a byte-order mark is accepted" || bad "a config file starting with a byte-order mark is accepted" "$OUT"
 done_with "$D"
@@ -319,9 +328,10 @@ full "$P"; [ "$FULL_RC" = 0 ] || bad "push setup" "step $FULL_RC: $OUT $CHECK_OU
 expect "a built, checked, planned and approved release is pushed" 0 PUSHED_OK bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
 [ "$(git -C "$P" rev-parse origin/main)" = "$(git -C "$P" rev-parse HEAD)" ] && ok "origin now has exactly that commit" || bad "origin now has exactly that commit" "$(git -C "$P" log --oneline -3 origin/main)"
 expect "running the push again does nothing" 0 ALREADY_PUSHED bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
-export GH_STUB=off; expect "the live check says so when gh is missing" 6 NO_GH bash "$S/wait_live.sh" "$WT" 60
+export GH_STUB=success; expect "with origin off GitHub and no domain set, the live check says so" 3 "NOT GITHUB" bash "$S/wait_live.sh" "$WT" 60
 git -C "$P" config remote.origin.url https://github.com/test/launch.git
 git -C "$P" config "url.$(winpath "$P.git").insteadOf" https://github.com/test/launch.git
+export GH_STUB=off; expect "the live check says so when gh is missing" 6 NO_GH bash "$S/wait_live.sh" "$WT" 60
 export GH_STUB=success; expect "with no domain set, the live check reports DEPLOYED" 0 DEPLOYED bash "$S/wait_live.sh" "$WT" 60
 export GH_STUB=failure; out="$(bash "$S/wait_live.sh" "$WT" 60 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q BUILD_FAILED <<<"$out" && ok "the live check reports a failed host build" || bad "the live check reports a failed host build" "exit $rc: $out"
@@ -361,8 +371,60 @@ expect "another commit id in the script is not proof" 0 "DEPLOYED" bash "$S/wait
 unset STUB_DEPLOY_STATUS STUB_DOMAIN_BODY STUB_ASSET_BODY
 export GH_STUB=inactive; expect "a deployment replaced by a newer one is NOT_CONFIRMED" 5 "replaced" bash "$S/wait_live.sh" "$WT" 30
 export GH_STUB=pending; expect "a build still running at the time limit says STILL BUILDING, to check again" 2 "STILL BUILDING" env POLL=1 bash "$S/wait_live.sh" "$WT" 2
-export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP
+# Without GitHub's deployment records the live check watches the site itself, for proof only.
+export POLL=1 GH_STUB=off STUB_DOMAIN_BODY="<script type=\"module\" src=\"/assets/$asset\"></script>"
+out="$(bash "$S/wait_live.sh" "$WT" 30 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q "Watching www.launchcodes-test.dev itself" <<<"$out" && grep -q "only this build has" <<<"$out" \
+  && ok "without gh, the live check watches the domain itself" || bad "without gh, the domain is watched" "exit $rc: $out"
+export GH_STUB=none; expect "when the host reports nothing to GitHub, the domain itself can show the release" 0 "only this build has" bash "$S/wait_live.sh" "$WT" 30
+export STUB_DOMAIN_BODY='<script type="module" src="/assets/app-0ld0ld00.js"></script>'
+out="$(env GRACE=1 bash "$S/wait_live.sh" "$WT" 3 2>&1)"; rc=$?
+[ "$rc" = 2 ] && grep -q "reports nothing to GitHub" <<<"$out" && grep -q "TIMEOUT.*doesn't show" <<<"$out" \
+  && ok "a domain still serving the old version, with nothing reported, is a TIMEOUT, never LIVE" || bad "an unchanged domain is a TIMEOUT" "exit $rc: $out"
+export GH_STUB=off STUB_DOMAIN_BODY='<p>a page that changed</p>'
+expect "a domain that changed without naming the release is NOT_CONFIRMED" 5 "changed after the push" bash "$S/wait_live.sh" "$WT" 2
+export STUB_DOMAIN_STATUS=000 STUB_DOMAIN_BODY=''
+expect "a domain that never answers is a TIMEOUT that says so" 2 "didn't answer" bash "$S/wait_live.sh" "$WT" 2
+unset STUB_DOMAIN_STATUS
+cfgset "$V" ', "domain": "www.launchcodes-test.dev", "liveUrl": "/version.txt"'
+export STUB_VERSION_BODY="$pushed7" STUB_DOMAIN_BODY='<script type="module" src="/assets/app-0ld0ld00.js"></script>'
+expect "a liveUrl page naming the commit makes it LIVE" 0 "version.txt shows this release's commit id" bash "$S/wait_live.sh" "$WT" 30
+export GH_STUB=success; expect "also when the host reports the deployment" 0 "version.txt shows this release's commit id" bash "$S/wait_live.sh" "$WT" 30
+export GH_STUB=off STUB_VERSION_BODY="0000000 deployed"
+expect "a liveUrl page naming another commit is not proof" 2 TIMEOUT bash "$S/wait_live.sh" "$WT" 2
+cfgset "$V" ', "domain": "www.launchcodes-test.dev"'
+export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP POLL STUB_DOMAIN_BODY STUB_VERSION_BODY
 bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+
+# --- your own checks, and your own deploy command ----------------------------------------------------------------
+CK="$(new_app own-checks)"; cfgset "$CK" ', "checks": ["test -f package.json", "test -d dist"]'
+commit "$CK" c.txt c "a change with the owner's own checks"
+full "$CK"; [ "$FULL_RC" = 0 ] && grep -q "passed: test -d dist" <<<"$CHECK_OUT" && ok "your own checks run in the clean copy, after the build" || bad "your own checks run" "step $FULL_RC: $CHECK_OUT"
+expect "the plan counts them" 0 "your own checks ✓ (2)" bash "$S/plan.sh" "$WT" --name 'Test release'
+cfgset "$CK" ', "checks": ["test -f package.json", "true"]'
+expect "push refuses when your checks changed after they ran" 1 "your own checks changed" bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
+done_with "$CK"
+cfgset "$CK" ', "checks": ["echo the tests said no && exit 3"]'; commit "$CK" c2.txt c "a change the owner's tests reject"
+full "$CK"; blocked "a failing check of your own blocks the release" "FAILED (exit 3)"
+grep -q "the tests said no" <<<"$CHECK_OUT" && ok "and shows what it printed" || bad "a failing check shows its output" "$CHECK_OUT"
+done_with "$CK"
+DP="$(new_app own-deploy)"; dcmd='echo $LAUNCH_CODE $LAUNCH_COMMIT > deployed.txt && echo uploaded'
+cfgset "$DP" ", \"deployCommand\": \"$dcmd\""; commit "$DP" d.txt d "a change for your own server"
+full "$DP"; [ "$FULL_RC" = 0 ] || bad "deploy setup" "step $FULL_RC: $OUT $CHECK_OUT"
+expect "the plan shows the deployCommand that runs after the push" 0 "AFTER THE PUSH, under the same yes" bash "$S/plan.sh" "$WT" --name 'Test release'
+cfgset "$DP" ', "deployCommand": "echo something else"'
+expect "push refuses when the deployCommand changed after the plan" 1 "deployCommand changed" bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
+cfgset "$DP" ", \"deployCommand\": \"$dcmd\""
+out="$(bash "$S/push.sh" "$WT" --owner-said-yes="$CODE" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q DEPLOYED_BY_COMMAND <<<"$out" && grep -q uploaded <<<"$out" && [ "$(cat "$WT/deployed.txt" 2>/dev/null)" = "$CODE $(git -C "$DP" rev-parse origin/main)" ] \
+  && ok "after the push, the deployCommand runs in the clean copy, told the launch code and commit" || bad "the deployCommand runs after the push" "exit $rc: $out / $(cat "$WT/deployed.txt" 2>&1)"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+cfgset "$DP" ', "deployCommand": "echo the server said no && exit 7"'; commit "$DP" e.txt e "a change whose deploy fails"
+full "$DP"; out="$(bash "$S/push.sh" "$WT" --owner-said-yes="$CODE" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q PUSHED_OK <<<"$out" && grep -q "DEPLOY_FAILED (exit 7)" <<<"$out" && grep -q "the server said no" <<<"$out" \
+  && ok "a failed deployCommand is reported, and the push stands" || bad "a failed deployCommand is reported" "exit $rc: $out"
+expect "and the live check reports DEPLOY_FAILED, without waiting" 1 DEPLOY_FAILED bash "$S/wait_live.sh" "$WT" 30
+done_with "$DP"
 Q="$(new_app refused)"; commit "$Q" q.txt q "a change the server refuses"
 printf '#!/bin/sh\necho "refused by a test hook" >&2\nexit 1\n' > "$Q.git/hooks/pre-receive"; chmod +x "$Q.git/hooks/pre-receive"
 full "$Q"; expect "a push the server refuses is reported, and nothing changes" 1 "NOT PUSHED" bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"

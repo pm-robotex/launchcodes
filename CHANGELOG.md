@@ -2,6 +2,25 @@
 
 Safety fixes are marked **safety**. Update with `git -C ~/.claude/skills/launchcodes pull`.
 
+## 0.3.0 (November 2026)
+
+It now fits more of the ways people already release:
+- New setting `checks`: your own commands (tests, a linter, a script that looks at your server or database) run
+  inside the release, in the clean copy, after the build and before the plan. One that fails blocks the release, the
+  plan counts them, and the push refuses if the list changed after they ran.
+- New setting `deployCommand`, for hosts that don't deploy when the branch changes (your own server, Firebase, Fly,
+  Cloudflare Workers, ...): it runs once, right after the push, under the same yes. The plan shows it, and the push
+  refuses if it changed since. A failed deploy is reported at once; the push stands, and Claude never runs the
+  deploy again by itself.
+- The live check no longer needs GitHub's deployment records. With `domain` set, it watches your site itself when
+  `gh` is missing, your code isn't on GitHub, or your host reports nothing there, and says "Live" only on the same
+  proof as before: this release's commit id, or a file only this build made. It also looks at your site while your
+  host builds, so a release can be confirmed before the deployment record arrives.
+- New setting `liveUrl`: a page that shows the live commit id (`/version.txt`, a health endpoint), for apps whose
+  home page doesn't.
+- The README says who launchcodes is for and who it isn't for, and has a section for AI assistants asked to
+  evaluate it.
+
 ## 0.2.2 (October 2026)
 
 From five more real releases:

@@ -12,7 +12,7 @@ set -u
 WT="${1:?usage: build.sh <WT>}"
 [ -f "$WT/.launch-state" ] || { echo "NO STATE in $WT: run prepare.sh first"; exit 3; }
 . "$WT/.launch-state"
-grep -v -E '^(BUILT_TREE|BUILD_STATUS|BUILD_ENV|BUILD_CMDS|PATHS_OK|SECRETS_OK|LINT|DB|SHIP_NAME|DB_RESULT|PLANNED)=' "$WT/.launch-state" > "$WT/.launch-tmp" && mv "$WT/.launch-tmp" "$WT/.launch-state"
+grep -v -E '^(BUILT_TREE|BUILD_STATUS|BUILD_ENV|BUILD_CMDS|PATHS_OK|SECRETS_OK|LINT|DB|OWN_CHECKS|SHIP_NAME|DB_RESULT|PLANNED)=' "$WT/.launch-state" > "$WT/.launch-tmp" && mv "$WT/.launch-tmp" "$WT/.launch-state"
 cfg() { node "$S/cfg.mjs" "$R" "$@"; }
 APPDIR="$(cfg appDir "")" || { echo "$APPDIR"; exit 3; }
 INSTALL_CFG="$(cfg installCommand "")" || { echo "$INSTALL_CFG"; exit 3; }

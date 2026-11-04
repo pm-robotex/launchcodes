@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // ledger.mjs <ships.log>
 // The launch ledger lives inside your repo's .git folder (never committed, never pushed). One tab-separated line
-// per event: <local time> <code> <PREPARED|PLANNED|PUSHED|LIVE|DEPLOYED|FAILED|UNCONFIRMED|CLEANED> <detail>.
+// per event: <local time> <code> <PREPARED|PLANNED|PUSHED|DEPLOY_CMD|LIVE|DEPLOYED|FAILED|UNCONFIRMED|CLEANED> <detail>.
+// DEPLOY_CMD is your "deployCommand" after the push: "ok", or "failed <exit code>".
 // This prints releases that were prepared but never cleaned up (in flight in another chat, or abandoned) and the
 // last three releases that were pushed.
 import { readFileSync } from 'node:fs';

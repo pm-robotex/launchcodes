@@ -7,7 +7,7 @@
 # It also warns when the build could change things outside its folder, because the build runs before your yes.
 # Exit: 0 ready | 1 nothing to ship / not a fast-forward | 3 setup problem (nothing was created)
 set -u
-VERSION=0.2.2
+VERSION=0.3.0
 S="$(cd "$(dirname "$0")" && pwd)"
 die() { echo "$1"; exit "${2:-3}"; }
 abspath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$(cd "$1" && pwd)"; else (cd "$1" && pwd); fi; }
@@ -91,12 +91,12 @@ if [ -n "$ARG_COMMIT" ]; then
 fi
 
 # 3 · can the build change things outside its folder? It runs before the owner's yes.
-cmds="$(node "$S/cfg.mjs" "$R" installCommand ""; echo; node "$S/cfg.mjs" "$R" buildCommand "")"
+cmds="$(node "$S/cfg.mjs" "$R" installCommand ""; echo; node "$S/cfg.mjs" "$R" buildCommand ""; echo; node "$S/cfg.mjs" "$R" checks "")"
 pkg="$(g show "$T:${APPDIR:+$APPDIR/}package.json" 2>/dev/null)"
 effects="$(printf '%s' "$pkg" | node -e '
   let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
     let scripts = {}; try { scripts = JSON.parse(s).scripts || {}; } catch {}
-    const extra = process.argv[1].split("\n").map((c, i) => [i ? "buildCommand" : "installCommand", c]).filter(([, c]) => c);
+    const extra = process.argv[1].split("\n").map((c, i) => [["installCommand", "buildCommand"][i] || "your check", c]).filter(([, c]) => c);
     const risky = /migrat|deploy|upload|seed|db push|db reset|supabase (db|functions)|prisma (migrate|db)|drizzle-kit (push|migrate)|knex migrate|sequelize db|sentry-cli|firebase deploy|wrangler (deploy|publish)|curl |wget /i;
     for (const [k, v] of [...Object.entries(scripts).filter(([k]) => /^(pre|post)?(install|build|prepare)$/.test(k)), ...extra])
       if (risky.test(String(v))) console.log(`   ${k}: ${v}`);
@@ -105,7 +105,7 @@ migs="$(g -c core.quotePath=false diff --name-status --diff-filter=AM --no-renam
   | awk -F'\t' '{ print $2 ($1 == "M" ? "   <- EDITED: this file was already in an earlier release; production may need the change applied again" : "") }')"
 nmigs="$(printf '%s' "$migs" | grep -c .)"; migs="$(printf '%s\n' "$migs" | head -40)"
 if [ -n "$effects" ]; then
-  echo; echo "== BUILD MAY CHANGE THINGS: these run in the build step, BEFORE your yes:"; echo "$effects"
+  echo; echo "== BUILD MAY CHANGE THINGS: these run in the build or check step, BEFORE your yes:"; echo "$effects"
   echo "   If they reach a real database or service, ask before building (or point them at test settings)."
 fi
 if [ "$nmigs" -gt 0 ]; then
@@ -172,20 +172,27 @@ fi
 TREE="$(g rev-parse "$T^{tree}")"
 
 # 6 · can the live check run after the push?
-DOMAIN="$(node "$S/cfg.mjs" "$R" domain "")"
+# Two ways to see it: your host's deployments as GitHub records them (needs gh), or your site itself ("domain",
+# "liveUrl"), which works with any host and any git server.
+DOMAIN="$(node "$S/cfg.mjs" "$R" domain "")"; LIVEURL="$(node "$S/cfg.mjs" "$R" liveUrl "")"
+GHOK=0; why=""
 case "$(g config --get remote.origin.url)" in
   *github.com[:/]*)
-    if ! command -v gh >/dev/null 2>&1; then LIVE="no: the GitHub CLI (gh) isn't installed, so after the push you check your host's dashboard yourself"
-    elif ! gh auth status >/dev/null 2>&1; then LIVE="no: gh isn't logged in (run  gh auth login ), so after the push you check your host's dashboard yourself"
-    elif [ -n "$DOMAIN" ]; then LIVE="yes: waits for your host's production deployment, then checks that $DOMAIN serves it"
-    else LIVE="partly: waits for your host's production deployment, but doesn't check your domain (set \"domain\" in .claude/launchcodes.json)"; fi ;;
-  *) LIVE="no: origin isn't on GitHub, so after the push you check your host's dashboard yourself" ;;
+    if ! command -v gh >/dev/null 2>&1; then why="the GitHub CLI (gh) isn't installed"
+    elif ! gh auth status >/dev/null 2>&1; then why="gh isn't logged in (run  gh auth login )"
+    else GHOK=1; fi ;;
+  *) why="origin isn't on GitHub" ;;
 esac
+where="${DOMAIN:-$LIVEURL}"
+if [ $GHOK = 1 ] && [ -n "$where" ]; then LIVE="yes: waits until $where serves this release (it follows your host's production deployment on GitHub, and watches $where itself)"
+elif [ $GHOK = 1 ]; then LIVE="partly: waits for your host's production deployment, but doesn't check your site (set \"domain\" in .claude/launchcodes.json)"
+elif [ -n "$where" ]; then LIVE="yes: watches $where directly until it serves this release ($why, so your host's deployments can't be seen)"
+else LIVE="no: $why, so after the push you check your site yourself (set \"domain\" and launchcodes watches it for you)"; fi
 
 # 7 · commits already on $PROD that your host never put live (a failed or blocked build): they go live with this
 # release, so the plan must name them. Your host's last successful production deployment, as GitHub records it.
 UNDEP=0; LIVE_SHA=""
-case "$LIVE" in yes*|partly*)
+case "$GHOK" in 1)
   REPO="$(g config --get remote.origin.url | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's#\.git$##')"
   for line in $(gh api "repos/$REPO/deployments?per_page=10" --jq '.[] | select((.environment // "") | test("production"; "i")) | "\(.id):\(.sha)"' 2>/dev/null); do
     st="$(gh api "repos/$REPO/deployments/${line%%:*}/statuses?per_page=1" --jq '.[0].state // empty' 2>/dev/null)"

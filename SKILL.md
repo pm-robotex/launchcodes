@@ -1,6 +1,6 @@
 ---
 name: launchcodes
-description: Put committed work live safely. Builds the exact commit in a clean copy, checks it (secret files, keys pasted into code, crash-causing undefined names, and for Supabase what the production database lacks), gives the release a launch code and a plain-language plan, pushes only after you say yes, then checks the live site. Runs only when you type /launchcodes.
+description: Put committed work live safely, for apps that go live from a git branch (a push, or your own deploy command). Builds the exact commit in a clean copy, checks it (secret files, keys pasted into code, crash-causing undefined names, for Supabase what the production database lacks, and your own checks), gives the release a launch code and a plain-language plan, pushes only after you say yes, then checks the live site. Runs only when you type /launchcodes.
 disable-model-invocation: true
 argument-hint: "[commit | list number] [dry-run]"
 allowed-tools:
@@ -14,7 +14,7 @@ allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/cleanup.sh" *)'
 ---
 
-# /launchcodes 0.2.2: committed work to production, after your yes
+# /launchcodes 0.3.0: committed work to production, after your yes
 
 Arguments: `$ARGUMENTS`
 - **empty**: step 0, list the releases that are ready; the owner picks one.
@@ -70,7 +70,8 @@ Exit 0: keep `WT=` and `LAUNCH CODE:`. Tell the owner about anything under "NOT 
 "Not cleaned up yet" or "Clean copies from earlier runs"; a copy marked `THE SAME COMMIT` means another chat may be
 launching this release now: ask the owner before step 2. Exit 1 (`NOTHING_TO_SHIP`, `NOT_FAST_FORWARD`) or 3 (a
 setup problem; nothing was created): explain it in plain words and stop.
-- **"BUILD MAY CHANGE THINGS"** or **"MIGRATION FILES"** printed: the build runs before the yes. Ask the owner
+- **"BUILD MAY CHANGE THINGS"** or **"MIGRATION FILES"** printed: the build and the owner's own checks run before
+  the yes. Ask the owner
   before step 2: do those scripts reach a real database or service with the settings the build gets, is each
   migration (EDITED ones included) already applied to production, and does anything (CI, a database integration,
   the build) apply migrations when the branch is pushed? Not safe or not sure: step 7.
@@ -101,7 +102,8 @@ HINT, then step 7. Exit 3: explain, then step 7.
 bash "${CLAUDE_SKILL_DIR}/scripts/check.sh" "<WT>"
 ```
 - `CHECKS_BLOCKED`: show what blocked and the printed fix, then step 7. A failed check is never overridden in this
-  run: fix, commit, /launchcodes again. `CHECKS DID NOT ALL RUN`, or exit 3: step 7.
+  run: fix, commit, /launchcodes again. A `FAILED` line under "Your own checks" is one of the owner's own commands
+  (`"checks"`): show its last lines. `CHECKS DID NOT ALL RUN`, or exit 3: step 7.
 - A NEW code-check error naming a global the page gets from a `<script>` tag or a bundler define: the owner adds it
   to `"lintGlobals"` in `.claude/launchcodes.json`, then /launchcodes again.
 - `CHECKS_PASSED` with **SQL printed (Supabase)**: run it first, on **production only**, with a Supabase MCP
@@ -123,7 +125,9 @@ bash "${CLAUDE_SKILL_DIR}/scripts/plan.sh" "<WT>" --name '<name>' [--db checked|
 `BAD NAME` or `NO NAME`: choose another name, run it again. `DATABASE QUERY NOT RUN YET`: back to step 3.
 `READY_TO_ASK`: post the plan as its own message, with nothing after it: plain words, at most 15 lines, no ids or
 paths in the body. The plan facts list each commit's files, which is usually enough to say what it does. To see
-more, `git show --stat <id>` or `git show <id> -- <file>` is fine: plain read-only git, never `git -C`.
+more, `git show --stat <id>` or `git show <id> -- <file>` is fine: plain read-only git, never `git -C`. With
+`AFTER THE PUSH` in the plan facts, the **When you say yes** line also says that the same yes then runs the owner's
+deploy command, quoted exactly.
 
 > **Ship <code> · <name>: ready to put N commit(s) live on <domain or branch>. Nothing has gone live yet.**
 > - <each commit: its own subject, and what it does in plain words> (group them only beyond about 10)
@@ -142,12 +146,14 @@ that question in bold. `dry-run`: no question; step 7.
   or commit, then /launchcodes again), then step 7.
 - "Later", "tonight", no, anything unclear: not a yes. Step 7.
 
-## 5 · Launch: the only production step
+## 5 · Launch: the only production step (`timeout: 600000`)
 Give this Bash call the description `Ship <code> · <name> · PUSH to <branch> (production)`:
 ```
 bash "${CLAUDE_SKILL_DIR}/scripts/push.sh" "<WT>" --owner-said-yes=<code>
 ```
-`PUSHED_OK` or `ALREADY_PUSHED`: step 6. `NOT PUSHED: ...`: nothing changed; say why in plain words, then step 7.
+`PUSHED_OK` or `ALREADY_PUSHED`: step 6. With a deploy command it then prints `DEPLOYED_BY_COMMAND` or
+`DEPLOY_FAILED`: either way step 6. After `DEPLOY_FAILED` the push stands: never run the deploy command, or push.sh,
+again yourself. `NOT PUSHED: ...`: nothing changed; say why in plain words, then step 7.
 `PROD_MOVED`: someone pushed or rolled back; the owner brings their branch up to date, then /launchcodes again.
 `PUSH UNCLEAR`: push nothing more; step 7, and the report heading is **Ship <code> · <name>: pushed, but unclear:
 <what it printed>. Check your host's dashboard.** The permission prompt was refused: nothing was pushed; ask once,
@@ -159,9 +165,11 @@ bash "${CLAUDE_SKILL_DIR}/scripts/wait_live.sh" "<WT>"
 ```
 It can take up to 9 minutes. Don't run it in the background: its result would arrive in a new turn, where the
 cleanup is no longer pre-approved. When it returns, post one line:
-- `LIVE`: **Ship <code> · <name>: Live ✅ <domain> serves it (<time>).**
+- `LIVE`: **Ship <code> · <name>: Live ✅ <the domain or page it names> serves it (<time>).**
 - `DEPLOYED`: **Ship <code> · <name>: Published ✅ <host> finished building it (<time>); <the reason it gives why the domain wasn't confirmed>.**
 - `TIMEOUT` with `STILL BUILDING`: your host is still at it. Run the same command once more, then report.
+- `DEPLOY_FAILED`: **Ship <code> · <name>: pushed, but the deploy command failed, so the previous version is probably still live.**
+  Quote the lines push.sh showed; the owner fixes it and deploys.
 - anything else: **Ship <code> · <name>: pushed, not confirmed live: <reason in plain words>.** <branch> now has
   it; give the next step from the script's message. Never write "unchanged" after a push.
 
@@ -177,4 +185,4 @@ The heading is the line from step 5 or 6, or **Ship <code> · <name>: not launch
 unchanged.** (only when nothing was pushed). Then one plain line per commit that went live, and "If you had the site
 open, refresh once." Never suggest checking by creating, editing or deleting real records on the live site; suggest
 a look-only check or the owner's own test record. End with _Record: Ship <code> · <branch> <old id> to <new id> ·
-launchcodes 0.2.2_ and "This /launchcodes is finished."
+launchcodes 0.3.0_ and "This /launchcodes is finished."
