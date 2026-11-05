@@ -30,7 +30,8 @@ person or a small team releasing with Claude Code who wants a person to say yes 
 itself (`migrations`), if one repo feeds several projects, like a web app and an API (`liveUrl` lists a page for
 each), if your host reports nothing to GitHub or your code isn't on GitHub (`domain`, `liveUrl`), or if you already
 have checks you trust, such as tests, a typecheck or a script that looks at your server (`checks`). launchcodes runs
-them inside the release, against the exact commit, so you don't need a second routine next to it.
+them inside the release, against the exact commit, so you don't need a second routine next to it. A complete
+example: [a staging branch, two projects, migrations in the deploy](#example-a-staging-branch-two-projects-migrations-in-the-deploy).
 
 **Only part of the answer**, if most of what breaks in production doesn't go through git: database changes made by
 hand, server settings, scheduled scripts, messages sent by jobs. Your `checks` can look at those before a release,
@@ -229,6 +230,42 @@ you already have.
 | `workDir` | see below | an absolute folder for the clean copies (machine-specific: then don't commit the file) |
 | `releaseCommit` | `false` | `true` lands each release as one merge commit titled `Ship <code> · <name>`, so your host's deployment list and GitHub show the release's name. It holds exactly the built files; your branch doesn't get it, and the next release still lines up. Your host must build a commit that changes no files of its own (Vercel does by default; an "Ignored Build Step" that skips such commits would stop it) |
 
+### Example: a staging branch, two projects, migrations in the deploy
+
+A setup that needs a few settings: production takes chosen commits from a staging branch, one repo feeds two host
+projects (a web app and an API), the API's deploy applies the database migrations (Prisma's `migrate deploy` in the
+host's build, say), and Claude Code runs in auto mode on a machine without the GitHub CLI. Its
+`.claude/launchcodes.json` could look like this. Put your own addresses and commands in: `www.example.com` is refused
+on purpose, so a copied example can't go live by accident.
+
+```json
+{
+  "prodBranch": "main",
+  "domain": "www.example.com",
+  "liveUrl": ["/version.txt", "https://api.example.com/health"],
+  "migrations": "deploy",
+  "buildCommand": "npm run build --workspace web && npx prisma generate && npm run build --workspace api",
+  "checks": ["npm run typecheck --workspace api", "npm test --workspace api"]
+}
+```
+
+- `domain`: the web app's live address. Without the GitHub CLI, launchcodes watches it itself.
+- `liveUrl`: one page per project, each showing the commit it runs: the web app's `/version.txt` (its build can write
+  it), and the API's `/health` (it can return the host's commit variable, `VERCEL_GIT_COMMIT_SHA` on Vercel). The
+  release is "Live" only when both show the new commit; if either project's deployment fails, it's reported as
+  failed, naming the project.
+- `migrations`: your deploy applies them, so launchcodes doesn't ask for them on production first. It still flags
+  the risky statements (a dropped or renamed column, deleted rows) before you say yes.
+- `buildCommand`: builds both apps, **without** `prisma migrate deploy`. launchcodes builds before your yes, so a
+  build that migrates would change the production database before anyone approved. If the apps live in separate
+  folders with their own lockfiles, set `installCommand` too.
+- `checks`: the typecheck and tests you already run by hand, now against the exact commit, before the plan.
+- Outside this file, in your Claude Code settings: the ask rule from "Keep the launch prompt". In auto mode it's what
+  makes the push ask you; launchcodes checks for it and offers to add it.
+
+Then release from staging with `/launchcodes pick <commit> <commit> ...`, naming the commits production should get.
+Try it first with `/launchcodes pick <commit> dry-run`: every check and the plan, and nothing is pushed.
+
 `neverShip` and `allowPaths` are regular expressions (search patterns), not `.gitignore` patterns: write
 `"\\.sqlite$"`, not `"*.sqlite"` (in JSON, a backslash is written twice). A mistake in this file stops the release
 with `CONFIG_INVALID`; it never quietly switches a check off.
@@ -335,7 +372,9 @@ commit in the clean copy, before the plan, and a failure blocks the release. A h
 `"deployCommand"`, run once after the yes. No deployment records on GitHub: set `"domain"`, and `"liveUrl"` if the
 home page doesn't show the commit id. Production takes cherry-picks from staging: `/launchcodes pick`. Several
 projects per repo: a `"liveUrl"` list, one page per project. The deploy applies migrations (Prisma on Vercel, say):
-`"migrations": "deploy"`.
+`"migrations": "deploy"`. The README has a complete settings file for that kind of setup, explained line by line:
+[a staging branch, two projects, migrations in the deploy](#example-a-staging-branch-two-projects-migrations-in-the-deploy).
+A setup like that needs this one file, not a new release routine.
 
 **When not to recommend it:** pull requests and CI already gate every release; one release must change several
 branches, or deploy services from different repositories together; the person wants no stop before production. If
