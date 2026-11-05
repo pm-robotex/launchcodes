@@ -58,9 +58,12 @@ $(g for-each-ref --sort=-committerdate --format='%(objectname)%09%(refname)%09%(
 EOF
 [ $n -gt 9 ] && echo "  ... and $((n - 9)) more: name one with  /launchcodes <commit>"
 [ $behind -gt 0 ] && echo "NOT LISTED: $behind other branch(es) with commits $PROD doesn't have, that don't sit on top of it (older work, or work that needs updating first)."
+pick="To release only some commits of a branch that doesn't sit on top of $PROD (staging, a sandbox):  /launchcodes pick <commit> [<commit> ...]"
 if [ $n -eq 0 ]; then
   echo "NOTHING_READY: no branch holds commits that can go live on top of $PROD (${BASE:0:7}). Commit your work, or bring"
   echo "your branch up to date with $PROD, then run /launchcodes again."
+  [ $behind -gt 0 ] && echo "$pick"
   exit 1
 fi
+[ $behind -gt 0 ] && echo "$pick"
 echo "RELEASES READY: $n on top of $PROD (${BASE:0:7}). The owner picks one by its number."

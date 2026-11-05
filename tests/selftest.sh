@@ -28,7 +28,9 @@ expect() {   # expect <name> <exit code> <text the output must contain> <command
   if [ "$rc" = "$want" ] && grep -q -- "$grepfor" <<<"$out"; then ok "$name"; else bad "$name (exit $rc, wanted $want + '$grepfor')" "$out"; fi
 }
 
-# Stand-in for the GitHub CLI. GH_STUB: off (not logged in) | success | failure | inactive | pending | none (nothing reported)
+# Stand-in for the GitHub CLI. GH_STUB: off (not logged in) | success | failure | inactive | pending | none (nothing
+# reported) | multi-ok, multi-fail, multi-building (one commit, two projects: 101 = api, 102 = web) | ctx-pending (the
+# deployment is done, but the commit says another project is still building)
 cat > "$ROOT/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 mode="${GH_STUB:-off}"
@@ -36,21 +38,24 @@ if [ "$1" = auth ]; then [ "$mode" = off ] && exit 1; exit 0; fi
 [ "$1" = api ] || exit 1
 case "$2" in
   */compare/*) echo identical ;;
-  *deployments\?sha=*) [ "$mode" = none ] || echo 101 ;;
+  *deployments\?sha=*)    # each production deployment of the commit: "<id><TAB><environment>"
+    case "$mode" in none) ;; multi-*) printf '101\tProduction – api\n102\tProduction – web\n' ;; *) printf '101\tProduction\n' ;; esac ;;
   *deployments\?per_page=*) [ -n "${STUB_LIVE_SHA:-}" ] && echo "202:$STUB_LIVE_SHA" ;;   # production deployments, newest first
   */deployments/202/statuses*) echo success ;;
+  */deployments/102/statuses*) printf '2026-10-14T10:01:00Z\tsuccess\thttps://deploy-2.launchcodes-test.dev\t-\n' ;;
   */deployments/101/statuses*)
     case "$mode" in
-      success)  printf '2026-10-14T10:00:00Z\tsuccess\thttps://deploy-1.launchcodes-test.dev\t-\n' ;;
-      failure)  printf '2026-10-14T10:00:00Z\tfailure\t-\tDeployment was blocked\n' ;;
+      success|multi-ok|ctx-pending) printf '2026-10-14T10:00:00Z\tsuccess\thttps://deploy-1.launchcodes-test.dev\t-\n' ;;
+      failure|multi-fail) printf '2026-10-14T10:00:00Z\tfailure\t-\tDeployment was blocked\n' ;;
       inactive) printf '2026-10-14T10:00:00Z\tinactive\t-\t-\n' ;;
-      pending)  printf '2026-10-14T10:00:00Z\tpending\t-\t-\n' ;;
+      pending|multi-building) printf '2026-10-14T10:00:00Z\tpending\t-\t-\n' ;;
     esac ;;
+  */status)     # the commit's combined status: contexts from a host that are still pending
+    case "$mode" in pending) echo Vercel ;; ctx-pending) echo "Vercel – api" ;; esac ;;
   */statuses)   # a commit's statuses: counted (length), or read for the reason a deployment failed
     case "$*" in
       *length*) echo 0 ;;
-      *'"failure"'*) [ "$mode" = failure ] && printf 'Git author test must have access to the project on Vercel to create deployments.\thttps://vercel.com/test/help\n' ;;
-      *) [ "$mode" = pending ] && printf 'pending\tVercel is deploying your app\n' ;;   # the newest status, while it builds
+      *'"failure"'*) case "$mode" in failure|multi-fail) printf 'Git author test must have access to the project on Vercel to create deployments.\thttps://vercel.com/test/help\n' ;; esac ;;
     esac ;;
 esac
 EOF
@@ -63,6 +68,7 @@ for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; url="$a"; done
 case " $* " in *" --help "*) exit 0 ;; esac
 case "$url" in
   */version.txt) st=200; tag=""; body="${STUB_VERSION_BODY:-}" ;;
+  */health)   st=200; tag=""; body="${STUB_HEALTH_BODY:-}" ;;
   *deploy-*)  st="${STUB_DEPLOY_STATUS:-200}"; tag="${STUB_DEPLOY_ETAG:-}"; body="" ;;
   */assets/*) st=200; tag=""; body="${STUB_ASSET_BODY:-}" ;;
   *)          st="${STUB_DOMAIN_STATUS:-200}"; tag="${STUB_DOMAIN_ETAG:-}"; body="${STUB_DOMAIN_BODY:-}" ;;
@@ -71,6 +77,15 @@ printf '%s' "$body" > "$out"
 printf 'HTTP/1.1 %s X\r\n' "$st"; [ -n "$tag" ] && printf 'ETag: "%s"\r\n' "$tag"; printf '\r\n'
 EOF
 chmod +x "$ROOT/bin/gh" "$ROOT/bin/curl"; export PATH="$ROOT/bin:$PATH"; export GH_STUB=off
+# Claude Code settings for the tests, never yours: the ask rule that keeps the push behind a prompt (gate.mjs).
+export CLAUDE_CONFIG_DIR="$ROOT/claude-config"; mkdir -p "$CLAUDE_CONFIG_DIR"
+printf '{ "permissions": { "ask": ["Bash(*--owner-said-yes*)"] } }\n' > "$CLAUDE_CONFIG_DIR/settings.json"
+
+# Every script parses. (An apostrophe inside ${VAR:+...} once broke a whole script: bash reads it as a quote.)
+perr=""
+for f in "$S"/*.sh; do e="$(bash -n "$f" 2>&1)" || perr="$perr$(basename "$f"): $e"$'\n'; done
+for f in "$S"/*.mjs; do e="$(node --check "$f" 2>&1)" || perr="$perr$(basename "$f"): $e"$'\n'; done
+[ -z "$perr" ] && ok "every script parses" || bad "every script parses" "$perr"
 
 new_app() {   # new_app <name>: a bare origin <name>.git and a clone <name> with one commit on main. Prints the clone's path.
   local d="$ROOT/$1"; mkdir -p "$(dirname "$d")"
@@ -265,6 +280,10 @@ cfgset "$D" ', "checks": ["npm test", ""]'
 expect "an empty check is refused" 3 "is empty" bash "$S/prepare.sh" "$D"
 cfgset "$D" ', "deployCommand": "echo a\nrm -rf dist"'
 expect "a deployCommand on two lines is refused, so the plan shows all of it" 3 "must be one line" bash "$S/prepare.sh" "$D"
+cfgset "$D" ', "domain": "www.launchcodes-test.dev", "liveUrl": ["/version.txt", "health"]'
+expect "every page in a liveUrl list is checked" 3 "item 2 must be a full address" bash "$S/prepare.sh" "$D"
+cfgset "$D" ', "migrations": "auto"'
+expect "migrations takes only the values it knows" 3 "must be one of" bash "$S/prepare.sh" "$D"
 printf '\xef\xbb\xbf{ "workDir": "%s" }\n' "$(winpath "$WORK")" > "$D/.claude/launchcodes.json"
 prep "$D"; [ "$RC" -eq 0 ] && ok "a config file starting with a byte-order mark is accepted" || bad "a config file starting with a byte-order mark is accepted" "$OUT"
 done_with "$D"
@@ -386,14 +405,42 @@ expect "a domain that changed without naming the release is NOT_CONFIRMED" 5 "ch
 export STUB_DOMAIN_STATUS=000 STUB_DOMAIN_BODY=''
 expect "a domain that never answers is a TIMEOUT that says so" 2 "didn't answer" bash "$S/wait_live.sh" "$WT" 2
 unset STUB_DOMAIN_STATUS
+# One commit, two projects (a web app and an API): every production deployment has to succeed.
+export STUB_DOMAIN_BODY="<script type=\"module\" src=\"/assets/$asset\"></script>"
+export GH_STUB=multi-ok; out="$(bash "$S/wait_live.sh" "$WT" 30 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q "all 2 production deployments built it" <<<"$out" && grep -q "only this build has" <<<"$out" \
+  && ok "with two projects, LIVE says both production deployments built it" || bad "two projects, both built" "exit $rc: $out"
+export GH_STUB=multi-fail; out="$(bash "$S/wait_live.sh" "$WT" 30 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q BUILD_FAILED <<<"$out" && grep -qF "It failed in: Production – api" <<<"$out" && grep -qF "It built in: Production – web" <<<"$out" \
+  && ok "one project's failed build is BUILD_FAILED, even when the other one built later" || bad "one of two projects failed" "exit $rc: $out"
+export GH_STUB=multi-building; out="$(env POLL=1 bash "$S/wait_live.sh" "$WT" 2 2>&1)"; rc=$?
+[ "$rc" = 2 ] && grep -q "STILL BUILDING" <<<"$out" && grep -qF "Production – api" <<<"$out" && ! grep -q "LIVE:" <<<"$out" \
+  && ok "while a second project still builds it is never LIVE, though the domain already serves the new build" || bad "a second project still building" "exit $rc: $out"
+export GH_STUB=ctx-pending; out="$(env POLL=1 bash "$S/wait_live.sh" "$WT" 2 2>&1)"; rc=$?
+[ "$rc" = 2 ] && grep -qF "STILL BUILDING" <<<"$out" && grep -qF "Vercel – api" <<<"$out" \
+  && ok "a project that is building but has no deployment record yet holds the verdict back too" || bad "a pending project without a record" "exit $rc: $out"
+export GH_STUB=off
 cfgset "$V" ', "domain": "www.launchcodes-test.dev", "liveUrl": "/version.txt"'
 export STUB_VERSION_BODY="$pushed7" STUB_DOMAIN_BODY='<script type="module" src="/assets/app-0ld0ld00.js"></script>'
 expect "a liveUrl page naming the commit makes it LIVE" 0 "version.txt shows this release's commit id" bash "$S/wait_live.sh" "$WT" 30
 export GH_STUB=success; expect "also when the host reports the deployment" 0 "version.txt shows this release's commit id" bash "$S/wait_live.sh" "$WT" 30
 export GH_STUB=off STUB_VERSION_BODY="0000000 deployed"
 expect "a liveUrl page naming another commit is not proof" 2 TIMEOUT bash "$S/wait_live.sh" "$WT" 2
+# Several pages (the web app's version file and an API's health check): each must show the release.
+cfgset "$V" ', "domain": "www.launchcodes-test.dev", "liveUrl": ["/version.txt", "https://api.launchcodes-test.dev/health"]'
+export STUB_VERSION_BODY="$pushed7" STUB_HEALTH_BODY="{\"commit\":\"$pushed7\"}"
+expect "with several liveUrl pages, LIVE needs every one of them" 0 "health shows this release's commit id" bash "$S/wait_live.sh" "$WT" 30
+export STUB_HEALTH_BODY='{"commit":"0000000"}'
+out="$(bash "$S/wait_live.sh" "$WT" 2 2>&1)"; rc=$?
+[ "$rc" = 2 ] && grep -q "api.launchcodes-test.dev/health doesn't show" <<<"$out" && ! grep -q "LIVE:" <<<"$out" \
+  && ok "one page still on the old version keeps the release from LIVE" || bad "one of several pages is behind" "exit $rc: $out"
+cfgset "$V" ', "domain": "www.launchcodes-test.dev", "liveUrl": "https://api.launchcodes-test.dev/health"'
+export STUB_HEALTH_BODY="{\"commit\":\"$pushed7\"}"
+out="$(bash "$S/wait_live.sh" "$WT" 2 2>&1)"; rc=$?
+[ "$rc" = 2 ] && grep -q "www.launchcodes-test.dev doesn't show" <<<"$out" \
+  && ok "a page on another host doesn't vouch for the domain: the domain needs its own proof" || bad "the domain needs its own proof" "exit $rc: $out"
 cfgset "$V" ', "domain": "www.launchcodes-test.dev"'
-export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP POLL STUB_DOMAIN_BODY STUB_VERSION_BODY
+export GH_STUB=off; unset STUB_DOMAIN_ETAG STUB_DEPLOY_ETAG RETRY_SLEEP POLL STUB_DOMAIN_BODY STUB_VERSION_BODY STUB_HEALTH_BODY
 bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
 
 # --- your own checks, and your own deploy command ----------------------------------------------------------------
@@ -513,6 +560,82 @@ grep -q '"n":"gift_wrap"' <<<"$refs" && grep -q '"n":"name"' <<<"$refs" && grep 
 ! grep -qE '"n":"(on|rate)"' <<<"$refs" && ok "but not what a function inside that helper returns" || bad "an inner function's return is not a row" "$refs"
 grep -q "DYNAMIC.*orders.upsert" <<<"$out" && ok "a row it can't trace is listed for a person to read" || bad "an untraceable row is listed" "$out"
 done_with "$J"
+
+# --- the approval gate: the push must stop for a prompt in every permission mode --------------------------------
+GT="$(new_app gate)"; commit "$GT" g.txt g "a change behind the gate"; NOCFG="$ROOT/no-claude-config"; mkdir -p "$NOCFG"
+expect "without an ask rule for the push, prepare refuses" 3 GATE_MISSING env CLAUDE_CONFIG_DIR="$NOCFG" bash "$S/prepare.sh" "$GT"
+! git -C "$GT" worktree list | grep -q 'launch-' && ok "and creates nothing" || bad "a refused prepare creates nothing" "$(git -C "$GT" worktree list)"
+OUT="$(env CLAUDE_CONFIG_DIR="$NOCFG" bash "$S/prepare.sh" "$GT" --dry-run 2>&1)"; RC=$?; WT="$(sed -n 's/^WT=//p' <<<"$OUT" | head -1)"
+[ "$RC" = 0 ] && grep -q "APPROVAL GATE" <<<"$OUT" && ok "a dry run still works without it, and says so" || bad "a dry run without the rule" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+printf '{ "permissions": { "ask": ["Bash(bash:*)"] } }\n' > "$GT/.claude/settings.local.json"
+OUT="$(env CLAUDE_CONFIG_DIR="$NOCFG" bash "$S/prepare.sh" "$GT" 2>&1)"; RC=$?; WT="$(sed -n 's/^WT=//p' <<<"$OUT" | head -1)"
+[ "$RC" = 0 ] && ok "an ask rule in the project's local settings counts (bash:* covers the push)" || bad "an ask rule in the project's local settings" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+printf '{ "permissions": { "defaultMode": "bypassPermissions" } }\n' > "$GT/.claude/settings.json"
+expect "a project that turns permission prompts off is refused, ask rule or not" 3 GATE_OFF bash "$S/prepare.sh" "$GT"
+rm -f "$GT/.claude/settings.json" "$GT/.claude/settings.local.json"
+full "$GT"; [ "$FULL_RC" = 0 ] || bad "gate setup" "step $FULL_RC: $OUT $CHECK_OUT"
+expect "push checks the gate again, and refuses when the rule is gone" 1 "NOT PUSHED: GATE_MISSING" env CLAUDE_CONFIG_DIR="$NOCFG" bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
+done_with "$GT"
+SC="$ROOT/setup-claude-config"; mkdir -p "$SC"; printf '{ "model": "x", "permissions": { "allow": ["Bash(ls)"] } }\n' > "$SC/settings.json"
+expect "setup.sh --ask-rule adds the rule" 0 GATE_OK env CLAUDE_CONFIG_DIR="$SC" bash "$S/setup.sh" "$GT" --ask-rule
+got="$(node -e 'const j = require(process.argv[1]); process.stdout.write([j.model, j.permissions.allow.join(), j.permissions.ask.join()].join("|"))' "$(winpath "$SC/settings.json")")"
+[ "$got" = 'x|Bash(ls)|Bash(*--owner-said-yes*)' ] && ok "and keeps everything else in the file" || bad "setup --ask-rule keeps the rest" "$got"
+expect "and says so when it is already there" 0 "ALREADY THERE" env CLAUDE_CONFIG_DIR="$SC" bash "$S/setup.sh" "$GT" --ask-rule
+printf '{ "model": ' > "$SC/settings.json"
+expect "a settings file it can't read is left alone" 1 REFUSED env CLAUDE_CONFIG_DIR="$SC" bash "$S/setup.sh" "$GT" --ask-rule
+[ "$(cat "$SC/settings.json")" = '{ "model": ' ] && ok "untouched" || bad "an unreadable settings file stays untouched" "$(cat "$SC/settings.json")"
+
+# --- picking commits from a branch that doesn't sit on top of production -----------------------------------------
+PK="$(new_app pick)"; printf '1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n' > "$PK/x.txt"
+git -C "$PK" add x.txt; git -C "$PK" commit -q -m "a file with ten lines"; git -C "$PK" push -q origin main
+git -C "$PK" checkout -q -b staging
+commit "$PK" a.txt a "feature a"; A1="$(git -C "$PK" rev-parse HEAD)"
+commit "$PK" b.txt b "feature b"; B1="$(git -C "$PK" rev-parse HEAD)"
+commit "$PK" b.txt "b, improved" "improve feature b"; C1="$(git -C "$PK" rev-parse HEAD)"
+sed 's/^1$/1 sandbox only/' "$PK/x.txt" > "$PK/x.tmp" && mv "$PK/x.tmp" "$PK/x.txt"; git -C "$PK" commit -q -am "sandbox-only tweak"; S1="$(git -C "$PK" rev-parse HEAD)"
+sed 's/^10$/10 for production/' "$PK/x.txt" > "$PK/x.tmp" && mv "$PK/x.tmp" "$PK/x.txt"; git -C "$PK" commit -q -am "a fix production needs"; D1="$(git -C "$PK" rev-parse HEAD)"
+git clone -q "$PK.git" "$ROOT/pick-other" 2>/dev/null; commit "$ROOT/pick-other" hotfix.txt h "a hotfix straight on main"; git -C "$ROOT/pick-other" push -q origin HEAD:main
+git -C "$PK" fetch -q origin
+OUT="$(bash "$S/prepare.sh" "$PK" "$D1" 2>&1)"; RC=$?
+[ "$RC" = 1 ] && grep -q NOT_FAST_FORWARD <<<"$OUT" && grep -q "launchcodes pick" <<<"$OUT" && ok "a branch that doesn't sit on top is refused, with the way to pick from it" || bad "not on top: the pick hint" "$OUT"
+full "$PK" --pick "$A1"; [ "$FULL_RC" = 0 ] && ok "one commit picked from that branch goes through every step" || bad "a picked commit, every step" "step $FULL_RC: $OUT $CHECK_OUT"
+[ "$(git -C "$WT" rev-parse HEAD^)" = "$(git -C "$PK" rev-parse origin/main)" ] && [ "$(git -C "$WT" diff --name-only HEAD^ HEAD)" = a.txt ] \
+  && git -C "$WT" log -1 --format=%B | grep -q "(cherry picked from commit $A1)" \
+  && ok "the clean copy is what's live plus that one commit, which says where it came from" || bad "the picked clean copy" "$(git -C "$WT" log --format='%h %s' -3)"
+expect "the plan names the commit it was picked from" 0 "(picked from ${A1:0:7})" bash "$S/plan.sh" "$WT" --name 'Test release'
+expect "a picked release is pushed" 0 PUSHED_OK bash "$S/push.sh" "$WT" --owner-said-yes="$CODE"
+git -C "$PK" cat-file -e origin/main:a.txt 2>/dev/null && ! git -C "$PK" cat-file -e origin/main:b.txt 2>/dev/null && [ "$(git -C "$PK" rev-parse staging)" = "$D1" ] \
+  && ok "production got that change and nothing else; the branch it came from is untouched" || bad "what the picked push changed" "$(git -C "$PK" log --oneline -3 origin/main)"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+prep "$PK" --pick "$C1"
+[ "$RC" = 1 ] && grep -q PICK_CONFLICT <<<"$OUT" && ! git -C "$PK" worktree list | grep -q 'launch-' && ok "a pick that needs a commit left behind stops, and leaves no copy" || bad "a pick that conflicts" "exit $RC: $OUT"
+prep "$PK" --pick "$C1" "$B1"
+[ "$RC" = 0 ] && [ "$(git -C "$WT" log --format=%s -2 | tr '\n' '|')" = "improve feature b|feature b|" ] && ok "picks named out of order are applied oldest first" || bad "pick order" "exit $RC: $(git -C "$WT" log --format=%s -3 2>&1) $OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+prep "$PK" --pick "$D1"
+[ "$RC" = 0 ] && grep -q "EARLIER CHANGES NOT PICKED: 1" <<<"$OUT" && grep -q "sandbox-only tweak" <<<"$OUT" && ok "an earlier commit that changes the same file and isn't live is named" || bad "earlier changes not picked" "exit $RC: $OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+prep "$PK" --pick "$A1"
+[ "$RC" = 1 ] && grep -q NOTHING_TO_SHIP <<<"$OUT" && grep -q "the same change is already live" <<<"$OUT" && ok "a commit whose change is already live (picked before) is left out" || bad "an already-live pick" "exit $RC: $OUT"
+git -C "$PK" merge -q --no-ff -m "merge production into staging" origin/main >/dev/null 2>&1; M1="$(git -C "$PK" rev-parse HEAD)"
+expect "a merge commit can't be picked" 1 PICK_MERGE bash "$S/prepare.sh" "$PK" --pick "$M1"
+git -C "$PK" checkout -q main; git -C "$PK" reset -q --hard origin/main
+
+# --- migrations: applied by you before the push, or by your deploy ----------------------------------------------
+MG="$(new_app migrations)"; mkdir -p "$MG/prisma/migrations/20260101_drop_age"
+commit "$MG" prisma/migrations/20260101_drop_age/migration.sql 'ALTER TABLE "User" DROP COLUMN "age";' "drop the age column"
+prep "$MG"
+grep -q "must be on production first" <<<"$OUT" && grep -q "RISKY MIGRATION STATEMENTS: 1" <<<"$OUT" && grep -q "removes a column" <<<"$OUT" \
+  && ok "a migration that drops a column is flagged as risky" || bad "a risky migration" "$OUT"
+bash "$S/cleanup.sh" "$WT" >/dev/null 2>&1
+cfgset "$MG" ', "migrations": "deploy"'
+full "$MG"
+grep -q "Your deploy applies them when the push lands" <<<"$OUT" && ! grep -q "must be on production first" <<<"$OUT" && grep -q "while the previous version is still live" <<<"$OUT" \
+  && ok "with \"migrations\": \"deploy\" it doesn't ask for them on production first" || bad "migrations applied by the deploy" "$OUT"
+expect "and the plan says the deploy applies them, and that one is risky" 0 "your deploy applies them when the push lands; RISKY: 1" bash "$S/plan.sh" "$WT" --name 'Test release'
+done_with "$MG"
 
 # --- first run: the settings file from the owner's answers -----------------------------------------------------
 commit "$J" first.txt f "a change in a project without settings"; rm "$J/.claude/launchcodes.json"

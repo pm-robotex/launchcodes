@@ -1,8 +1,8 @@
 ---
 name: launchcodes
-description: Put committed work live safely, for apps that go live from a git branch (a push, or your own deploy command). Builds the exact commit in a clean copy, checks it (secret files, keys pasted into code, crash-causing undefined names, for Supabase what the production database lacks, and your own checks), gives the release a launch code and a plain-language plan, pushes only after you say yes, then checks the live site. Runs only when you type /launchcodes.
+description: Put committed work live safely, for apps that go live from a git branch (a push, or your own deploy command), a whole branch or commits picked from a staging branch. Builds the exact release in a clean copy, checks it (secret files, keys pasted into code, crash-causing undefined names, risky migrations, for Supabase what the production database lacks, and your own checks), gives it a launch code and a plain-language plan, pushes only after you say yes (and checks that Claude Code really asks you), then checks the live site. Runs only when you type /launchcodes.
 disable-model-invocation: true
-argument-hint: "[commit | list number] [dry-run]"
+argument-hint: "[commit | list number | pick <commit> ...] [dry-run]"
 allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/candidates.sh" *)'
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" *)'
@@ -14,16 +14,18 @@ allowed-tools:
   - 'Bash(bash "${CLAUDE_SKILL_DIR}/scripts/cleanup.sh" *)'
 ---
 
-# /launchcodes 0.3.0: committed work to production, after your yes
+# /launchcodes 0.4.0: committed work to production, after your yes
 
 Arguments: `$ARGUMENTS`
 - **empty**: step 0, list the releases that are ready; the owner picks one.
 - **a number**, from a list shown earlier in this conversation: step 0 again, and use it only if that number still
   names the same commit (otherwise show the new list).
 - **a commit id**: release exactly that commit (it must build on top of what is live).
+- **`pick` and one or more commit ids**: release exactly those commits from a branch that doesn't sit on top of what
+  is live (staging, a sandbox). launchcodes applies them on top of it in the clean copy, oldest first.
 - **`dry-run`** anywhere: every check and the plan; nothing is pushed.
 Without a commit id, never pick the release yourself, not even the one this conversation was about: the owner
-chooses from the list.
+chooses from the list. Never add commits to a `pick` either: only the ones the owner typed.
 
 The production branch is `prodBranch` in `.claude/launchcodes.json`, else origin's default branch: the branch your
 host deploys. The scripts are in `${CLAUDE_SKILL_DIR}/scripts` (if that text shows up unexpanded, use the folder
@@ -42,8 +44,9 @@ clean-copy path it prints.
    `--force`. Read each result from the script's own output.
 4. **Never write to the production database**: not to make a check pass, not when asked mid-release. The owner
    applies migrations; you only run the one read-only query that check.sh prints. **Never edit
-   `.claude/launchcodes.json` and never add `launchcodes:allow` to a file yourself**: those are the owner's calls.
-   The one exception: on a first run, setup.sh creates the file from the values the owner gave you (step 1).
+   `.claude/launchcodes.json`, Claude Code's settings files, or add `launchcodes:allow` to a file yourself**: those
+   are the owner's calls. The exceptions, each only after the owner's yes in step 1: setup.sh creating the settings
+   file from the values the owner gave you, and `setup.sh --ask-rule`.
 5. Give long steps `timeout: 600000`. Anything you can't explain: stop and tell the owner what you saw.
    Production is untouched until step 5.
 6. Compacted mid-release: Read `${CLAUDE_SKILL_DIR}/SKILL.md` again, then run
@@ -59,22 +62,36 @@ bash "${CLAUDE_SKILL_DIR}/scripts/candidates.sh" "<repo root>"
 use AskUserQuestion, one option per release (label `<n> · <branch>`, its line as the description); with one, the
 options **Prepare <branch>** and **Stop**; with more, end the turn asking for the number. You may say which one
 this conversation was about, but the owner chooses. The answer is a choice, not approval: step 1 with that
-release's full commit id from its `PICK` line. `NOTHING_READY` or exit 3: explain in plain words and stop. A
-release marked `ALREADY BEING LAUNCHED`: say so in the question; another chat may be launching it right now.
+release's full commit id from its `PICK` line. `NOTHING_READY` or exit 3: explain in plain words and stop (if it
+printed the `/launchcodes pick` line, pass that on). A release marked `ALREADY BEING LAUNCHED`: say so in the
+question; another chat may be launching it right now.
 
 ## 1 · Prepare
 ```
-bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" "<repo root>" [commit] [--dry-run]
+bash "${CLAUDE_SKILL_DIR}/scripts/prepare.sh" "<repo root>" [commit | --pick <commit> [<commit> ...]] [--dry-run]
 ```
 Exit 0: keep `WT=` and `LAUNCH CODE:`. Tell the owner about anything under "NOT part of this release", "NEWER",
-"Not cleaned up yet" or "Clean copies from earlier runs"; a copy marked `THE SAME COMMIT` means another chat may be
-launching this release now: ask the owner before step 2. Exit 1 (`NOTHING_TO_SHIP`, `NOT_FAST_FORWARD`) or 3 (a
-setup problem; nothing was created): explain it in plain words and stop.
+"LEFT OUT, already live", "Not cleaned up yet" or "Clean copies from earlier runs"; a copy marked `THE SAME COMMIT`
+or `THE SAME PICKS` means another chat may be launching this release now: ask the owner before step 2. Exit 1
+(`NOTHING_TO_SHIP`, `NOT_FAST_FORWARD`, `PICK_CONFLICT`, `PICK_MERGE`, `PICK_ROOT`, `PICK_EMPTY`) or 3 (a setup
+problem): explain it in plain words and stop; nothing was created. `NOT_FAST_FORWARD` names the `pick` way: offer it,
+but the owner names the commits.
+- **`GATE_MISSING`** (exit 3): nothing makes sure Claude Code asks before the push, so in auto mode it could run
+  without a prompt. Say so in plain words and offer to add the ask rule with
+  `bash "${CLAUDE_SKILL_DIR}/scripts/setup.sh" "<repo root>" --ask-rule`, which only adds that one rule to their
+  Claude Code user settings. Run it only after the owner's yes, show what it printed, then step 1 again.
+  **`GATE_OFF`** or **`GATE_DENIED`**: a setting turns prompts off or blocks the push; only the owner can change it.
+- **"EARLIER CHANGES NOT PICKED"** printed: commits before the picks that change the same files aren't live, and the
+  picks may need them. Name them and ask the owner before step 2 whether to go on; adding them means a new
+  `/launchcodes pick` that names them too.
 - **"BUILD MAY CHANGE THINGS"** or **"MIGRATION FILES"** printed: the build and the owner's own checks run before
   the yes. Ask the owner
   before step 2: do those scripts reach a real database or service with the settings the build gets, is each
   migration (EDITED ones included) already applied to production, and does anything (CI, a database integration,
-  the build) apply migrations when the branch is pushed? Not safe or not sure: step 7.
+  the build) apply migrations when the branch is pushed? With "Your deploy applies them" (the `"migrations":
+  "deploy"` setting) ask instead whether each is safe to run by itself while the previous version is still live.
+  **"RISKY MIGRATION STATEMENTS"** printed: name them in the same question (a dropped or renamed column, a new
+  required column, deleted rows). Not safe or not sure: step 7.
 - **"EDGE FUNCTIONS changed"** printed: pushing doesn't deploy them and launchcodes never does. Ask the owner in the
   same question whether production already runs these versions, or when they will be deployed (before the push if
   the new site needs them, after it if the old site would break). Not sure: step 7.
@@ -131,7 +148,7 @@ deploy command, quoted exactly.
 
 > **Ship <code> · <name>: ready to put N commit(s) live on <domain or branch>. Nothing has gone live yet.**
 > - <each commit: its own subject, and what it does in plain words> (group them only beyond about 10)
-> ⚠ <the one riskiest fact, if any: earlier commits ALSO GOING LIVE, edge functions the push won't deploy, a SUSPECT commit, NEWER or UNCOMMITTED work left out, code check skipped, database not checked, live check partial>
+> ⚠ <the one riskiest fact, if any: earlier commits ALSO GOING LIVE, EARLIER CHANGES NOT PICKED, RISKY migration statements, edge functions the push won't deploy, a SUSPECT commit, NEWER or UNCOMMITTED work left out, code check skipped, database not checked, live check partial>
 > **Checks:** build ✓ / nothing to build · secret files ✓ · keys in code ✓ · code check ✓ / skipped (why) · database ✓ / not checked / nothing to check
 > **When you say yes:** Claude Code asks you to approve one command, *"Ship <code> · <name> · PUSH to <branch> (production)"*. That is the launch: choose **Yes**, never "don't ask again". It may also ask before the live check and the cleanup: those are safe to approve. Anything else that asks during this release isn't part of it: tell me before answering.
 > **If it goes wrong:** your host can put the previous version back (Vercel: Deployments, the previous production deployment, Instant Rollback; new pushes then stay off your domain until you undo the rollback). The branch keeps the new commit: fix forward, or revert and /launchcodes again.
@@ -153,7 +170,8 @@ bash "${CLAUDE_SKILL_DIR}/scripts/push.sh" "<WT>" --owner-said-yes=<code>
 ```
 `PUSHED_OK` or `ALREADY_PUSHED`: step 6. With a deploy command it then prints `DEPLOYED_BY_COMMAND` or
 `DEPLOY_FAILED`: either way step 6. After `DEPLOY_FAILED` the push stands: never run the deploy command, or push.sh,
-again yourself. `NOT PUSHED: ...`: nothing changed; say why in plain words, then step 7.
+again yourself. `NOT PUSHED: ...`: nothing changed; say why in plain words, then step 7 (`NOT PUSHED: GATE_...`:
+the ask rule is gone, so the push might not have asked; step 1 explains).
 `PROD_MOVED`: someone pushed or rolled back; the owner brings their branch up to date, then /launchcodes again.
 `PUSH UNCLEAR`: push nothing more; step 7, and the report heading is **Ship <code> · <name>: pushed, but unclear:
 <what it printed>. Check your host's dashboard.** The permission prompt was refused: nothing was pushed; ask once,
@@ -171,7 +189,8 @@ cleanup is no longer pre-approved. When it returns, post one line:
 - `DEPLOY_FAILED`: **Ship <code> · <name>: pushed, but the deploy command failed, so the previous version is probably still live.**
   Quote the lines push.sh showed; the owner fixes it and deploys.
 - anything else: **Ship <code> · <name>: pushed, not confirmed live: <reason in plain words>.** <branch> now has
-  it; give the next step from the script's message. Never write "unchanged" after a push.
+  it; give the next step from the script's message. Never write "unchanged" after a push. A `BUILD_FAILED` that names
+  several projects: say which failed and which built (that part may be live already).
 
 ## 7 · Clean up: always
 ```
@@ -185,4 +204,4 @@ The heading is the line from step 5 or 6, or **Ship <code> · <name>: not launch
 unchanged.** (only when nothing was pushed). Then one plain line per commit that went live, and "If you had the site
 open, refresh once." Never suggest checking by creating, editing or deleting real records on the live site; suggest
 a look-only check or the owner's own test record. End with _Record: Ship <code> · <branch> <old id> to <new id> ·
-launchcodes 0.3.0_ and "This /launchcodes is finished."
+launchcodes 0.4.0_ and "This /launchcodes is finished."

@@ -2,6 +2,29 @@
 
 Safety fixes are marked **safety**. Update with `git -C ~/.claude/skills/launchcodes pull`.
 
+## 0.4.0 (November 2026)
+
+From a second team's review, whose way of releasing didn't fit 0.3.0:
+- **`/launchcodes pick <commit> ...`** releases just those commits from a branch production doesn't follow (staging,
+  a sandbox). The clean copy starts from what's live and gets only your picks, oldest first (`cherry-pick -x`), so
+  the build and the checks test the exact combination that goes live. A pick that conflicts, a merge commit, or a
+  change that's already live stops it cleanly; earlier commits that change the same files and aren't live are named.
+- **safety** The approval gate is checked, not assumed. Before every release and again right before the push,
+  launchcodes reads your Claude Code settings for an ask rule that keeps the push behind a prompt in every mode,
+  auto mode included, and refuses without it (a dry run still works). `setup.sh --ask-rule` adds it on your yes. A
+  settings file that turns prompts off (`bypassPermissions`) is refused too.
+- **safety** "Live" means every deployment. When one commit feeds several projects (a web app and an API), each
+  production deployment must succeed: one failure is BUILD_FAILED, naming the project, even when another one built
+  (0.3.0 read only the newest result and could miss it), and while any project still builds, the live check waits.
+  `liveUrl` takes a list: every page must show the new commit.
+- **safety** Risky migration statements are flagged: a dropped or renamed column or table, a changed type, a new
+  required column, deleted rows. They can break the version still running while the migration applies. Function
+  bodies are skipped, because they run only when called.
+- New setting `"migrations": "deploy"`, for a deploy that applies migrations itself (Prisma on Vercel, say): no more
+  "must be on production first"; the plan says your deploy applies them, and an edited migration is flagged as likely
+  to fail the deploy.
+- The self-test now checks that every script parses.
+
 ## 0.3.0 (November 2026)
 
 It now fits more of the ways people already release:

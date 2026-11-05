@@ -58,6 +58,10 @@ printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" PLANNED "$NAME"
 
 echo "PLAN FACTS: Ship $CODE · $NAME"
 echo "  release: $(git -C "$R" rev-list --count "$BASE..$T") commit(s) to $PROD on origin, ${BASE:0:7} -> ${T:0:7}$dry"
+if [ -n "${PICKS:-}" ]; then
+  echo "  picked: these are copies of the commits you named, applied on top of $PROD with cherry-pick -x (each says which"
+  echo "  commit it was picked from); the originals stay on their branches"
+fi
 [ "${RELEASE_COMMIT:-}" = true ] && echo "  release commit: they land under one merge commit named \"Ship $CODE · $NAME\", the name your host's deployment list shows"
 und="${UNDEPLOYED:-0}"; und_n="${und%% *}"; und_sha="${und#* }"
 if [ "${und_n:-0}" -gt 0 ] 2>/dev/null; then
@@ -71,6 +75,8 @@ git -C "$R" log --reverse --format='%h%x09%p%x09%s' "$BASE..$T" | while IFS=$'\t
   if printf '%s' "$s" | grep -qiE '(^|[^a-z])(wip|tmp|temp|debug|hack|fixme|xxx|do not (ship|merge|push|deploy)|don.?t (ship|merge|push|deploy)|local only|test only)([^a-z]|$)|^(fixup|squash)!'; then
     flag="   <- SUSPECT: looks like unfinished or local-only work"
   fi
+  o="$(git -C "$R" log -1 --format=%B "$h" | sed -n 's/^(cherry picked from commit \([0-9a-f]*\))$/\1/p' | tail -1)"
+  [ -n "${PICKS:-}" ] && [ -n "$o" ] && flag="   (picked from ${o:0:7})$flag"
   echo "    $h  $s$flag"
   # A merge is listed against its first parent: what it brings into the branch.
   case "$p" in
@@ -82,7 +88,16 @@ git -C "$R" log --reverse --format='%h%x09%p%x09%s' "$BASE..$T" | while IFS=$'\t
   [ "$n" -gt 8 ] && echo "        (+$((n - 8)) more)"
 done
 rm -f "$WT/.launch-files-tmp"
+if [ "${PICK_DEPS:-0}" -gt 0 ] 2>/dev/null; then
+  echo "  EARLIER CHANGES NOT PICKED: $PICK_DEPS commit(s) before the picks change the same files and aren't live; the picks may need them:"
+  grep . "$WT/.launch-pick-deps" 2>/dev/null | head -5 | while IFS= read -r c; do echo "      $(git -C "$R" log -1 --format='%h  %s' "$c" | cut -c1-100)"; done
+fi
 echo "  files: $(git -C "$R" diff --shortstat --no-renames "$BASE" "$T" | sed 's/^ *//')"
+if [ "${MIG_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+  by="you apply them on production BEFORE the push"; [ "${MIG_MODE:-}" = deploy ] && by="your deploy applies them when the push lands"
+  risky=""; [ "${MIG_RISKY:-0}" -gt 0 ] 2>/dev/null && risky="; RISKY: $MIG_RISKY statement(s) that can break the live version (prepare listed them)"
+  echo "  migrations: $MIG_COUNT file(s), $by$risky"
+fi
 added="$(git -c core.quotePath=false -C "$R" diff --name-only --diff-filter=A --no-renames "$BASE" "$T" | grep -iE '(^|/)(seeds?|fixtures?|mocks?)(/|\.)' | head -5)"
 [ -n "$added" ] && { echo "  SUSPECT files (test data going live?):"; echo "$added" | sed 's/^/    /'; }
 head="$(git -C "$R" rev-parse HEAD)"
@@ -100,5 +115,8 @@ echo "  checks: $b · secret files ✓ · keys in code ✓ · $l · $d$own$envs"
 echo "  the build ran: ${BUILD_CMDS:-?}"
 [ -n "$dep" ] && echo "  AFTER THE PUSH, under the same yes, it runs your deployCommand: $dep"
 echo "  live check: $LIVE_CHECK"
-echo "  approval: only the owner's yes to this plan, then  push.sh <WT> --owner-said-yes=$CODE"
+case "${GATE:-}" in
+  GATE_OK) echo "  approval: only the owner's yes to this plan, then  push.sh <WT> --owner-said-yes=$CODE  (Claude Code always asks before it runs: checked)" ;;
+  *) echo "  approval: NOT GUARANTEED (${GATE:-not checked}): the push might run without a prompt. This is a dry run, so nothing is pushed." ;;
+esac
 echo "READY_TO_ASK"

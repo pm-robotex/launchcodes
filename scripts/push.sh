@@ -10,6 +10,8 @@
 #   3. production on origin is still exactly where it was when this started (nobody pushed or rolled it back)
 #   4. the files changing are exactly the list you approved
 #   5. both secret checks still pass (run again here, the last moment before the push)
+#   6. Claude Code is still set to ask you before this command runs (gate.mjs), so it can't have run without your
+#      say-so in a mode that skips prompts
 # Then it pushes that exact commit by its id (never a branch name, never --force) and checks GitHub has it. With
 # "releaseCommit" it pushes a merge commit named "Ship <code> · <name>" on top instead, holding the same files.
 # With "deployCommand" (for a host that doesn't deploy on push, like your own server), it then runs that command in
@@ -34,6 +36,7 @@ OWN_V="${OWN_CHECKS:-}"
 [ "${PLANNED:-}" = "$TREE" ] && [ -f "$WT/.launch-approved-files" ] || { echo "NOT PUSHED: no plan recorded (run plan.sh and show the plan first)"; exit 1; }
 dep="$(node "$S/cfg.mjs" "$R" deployCommand "")" || { echo "NOT PUSHED: $dep"; exit 1; }
 [ "$dep" = "${DEPLOY_PLANNED-}" ] || { echo "NOT PUSHED: your deployCommand changed since the plan was shown. Show the plan again."; exit 1; }
+gate="$(node "$S/gate.mjs" "$R" "$S")" || { echo "NOT PUSHED: $gate"; exit 1; }
 
 led() { printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$CODE" "$1" "$2" >> "$LOG" 2>/dev/null; }
 TIP="$T"    # what lands on top of $PROD: the release's commit, or (with "releaseCommit") a merge commit named after it

@@ -11,7 +11,8 @@ const KEYS = {
   prodBranch: 'string', domain: 'string', supabaseProjectRef: 'string', appDir: 'dir',
   buildCommand: 'string', installCommand: 'string', workDir: 'abs',
   buildEnvFiles: 'paths', neverShip: 'regexes', allowPaths: 'regexes', lintGlobals: 'names', codeCheck: 'boolean',
-  releaseCommit: 'boolean', checks: 'commands', deployCommand: 'string', liveUrl: 'url',
+  releaseCommit: 'boolean', checks: 'commands', deployCommand: 'string', liveUrl: 'urls',
+  migrations: 'enum:manual|deploy',
 };
 const EXAMPLE = { domain: /^(https?:\/\/)?(www\.)?example\.(com|org)\/?$/i, supabaseProjectRef: /^your-/i };
 const inside = (p) => !(p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:/.test(p) || p.split(/[\\/]/).includes('..'));
@@ -31,9 +32,19 @@ export function loadConfig(repo) {
     if (v === null) continue;
     const fail = (why) => { throw new ConfigError(`"${k}" ${why}`); };
     if (type === 'boolean') { if (typeof v !== 'boolean') fail('must be true or false'); continue; }
-    if (type === 'url') {
-      if (typeof v !== 'string' || !/^(https?:\/\/[^\s/]+[^\s]*|\/[^\s]*)$/.test(v)) fail('must be a full address (https://...) or a path on your domain starting with /');
-      if (v.startsWith('/') && !cfg.domain) fail('is a path, so "domain" must be set too');
+    if (type.startsWith('enum:')) {
+      const ok = type.slice(5).split('|');
+      if (!ok.includes(v)) fail(`must be one of: ${ok.map((o) => `"${o}"`).join(', ')}`);
+      continue;
+    }
+    if (type === 'urls') {   // one address, or a list: every one must show the release before launchcodes says Live
+      const list = Array.isArray(v) ? v : [v];
+      if (!list.length) fail('must be an address, or a list of them');
+      list.forEach((u, i) => {
+        const what = Array.isArray(v) ? `item ${i + 1}` : 'it';
+        if (typeof u !== 'string' || !/^(https?:\/\/[^\s/]+[^\s]*|\/[^\s]*)$/.test(u)) fail(`${what} must be a full address (https://...) or a path on your domain starting with /`);
+        if (u.startsWith('/') && !cfg.domain) fail(`${what} is a path, so "domain" must be set too`);
+      });
       continue;
     }
     if (type === 'string' || type === 'dir' || type === 'abs') {
